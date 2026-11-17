@@ -1,0 +1,36 @@
+// Slice 1 of MINECRAFT-510's bounded implementation sequence: the pure erosion policy/config
+// module only (deterministic slip/load/resistance mapping, immutable config snapshot with
+// atomic-rejected hot reload -- MINECRAFT-555 comments 54607/54611/54614/54618, approved
+// 54622/54623). This module makes no reference to Minecraft/NeoForge classes, so it is built and
+// tested as a plain java-library + JUnit 5 project rather than pulling in the full
+// net.neoforged.moddev toolchain this project will need once the NeoForge-side mod scaffold
+// (main mod class, mixins, DIV/layered-slopes/layered-slope-grading download-and-verify
+// dependencies, GameTest harness) is added in a later slice -- see README.md and the MINECRAFT-510
+// pickup comment for why that part is deliberately deferred in this PR (active M545 PR #39 is
+// still touching DIV's PhysicsBridge.java; the grading-side mutation seam is unreviewed).
+plugins {
+    id 'java-library'
+}
+
+group = project.mod_group_id
+version = (findProperty("mod_version") ?: project.version) as String
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation platform('org.junit:junit-bom:5.11.3')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}
