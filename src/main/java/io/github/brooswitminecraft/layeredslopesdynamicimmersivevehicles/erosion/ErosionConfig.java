@@ -2,7 +2,7 @@ package io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosio
 
 /**
  * Immutable erosion-policy config snapshot, per the MINECRAFT-555 v4 prep packet (comment 54618,
- * approved 54622/54623). {@link #validate()} checks all 7 fields plus the relational constraints
+ * approved 54622/54623). {@link #isValid()} checks all 7 fields plus the relational constraints
  * as one composed tuple (never field-by-field): {@link Overrides#reload} discards the ENTIRE
  * candidate and keeps every prior value unchanged if any single check fails (atomic reject,
  * case 28). Values are not individually mutable after construction.

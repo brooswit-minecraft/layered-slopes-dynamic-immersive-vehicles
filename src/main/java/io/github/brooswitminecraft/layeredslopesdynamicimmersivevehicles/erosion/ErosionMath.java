@@ -51,7 +51,8 @@ public final class ErosionMath {
     /**
      * {@code resistance = 0.5*compress(hardness, 50.0) + 0.5*compress(blastResistance, 1200.0)}.
      * Reads only universal vanilla BlockState.getDestroySpeed/getExplosionResistance values;
-     * this is DIV's own independent implementation, not a call into any Dynamic Terrain class.
+     * this is this compat mod's own independent implementation, not a call into any Dynamic
+     * Terrain class.
      */
     public static double resistance(double hardness, double blastResistance) {
         return 0.5 * compress(hardness, 50.0) + 0.5 * compress(blastResistance, 1200.0);
@@ -64,12 +65,29 @@ public final class ErosionMath {
     }
 
     /**
-     * Full pipeline per the accepted contract. Returns 0.0 (SKIPPED, no RNG draw expected from
-     * the caller) when {@code slipSpeedMs <= config.slipThresholdMs()} without evaluating the
-     * rest of the formula, matching DT TireSlip.report's amount&lt;=0 short-circuit shape.
+     * Full pipeline per the accepted contract. Fails closed to 0.0 (SKIPPED, no RNG draw expected
+     * from the caller) at this integration boundary when any of:
+     * <ul>
+     *   <li>{@code config} is not itself a valid snapshot ({@link ErosionConfig#isValid()});</li>
+     *   <li>any runtime input is non-finite (NaN or +/-Infinity) -- an unsupported/invalid
+     *       telemetry reading must never silently become a maximum-chance or NaN result;</li>
+     *   <li>{@code wheelLoadKg <= 0} -- zero or negative physical load is an explicit no-op,
+     *       evaluated BEFORE {@link #loadFactor} would otherwise clamp it up to
+     *       {@code minLoadFactor} and produce a nonzero chance for a wheel bearing no load;</li>
+     *   <li>{@code slipSpeedMs <= config.slipThresholdMs()} -- the no-slip guard, matching DT
+     *       TireSlip.report's amount&lt;=0 short-circuit shape.</li>
+     * </ul>
      */
     public static double successChance(double slipSpeedMs, double wheelLoadKg, double hardness,
                                         double blastResistance, ErosionConfig config) {
+        if (!config.isValid()
+                || !Double.isFinite(slipSpeedMs) || !Double.isFinite(wheelLoadKg)
+                || !Double.isFinite(hardness) || !Double.isFinite(blastResistance)) {
+            return 0.0;
+        }
+        if (wheelLoadKg <= 0.0) {
+            return 0.0;
+        }
         if (slipSpeedMs <= config.slipThresholdMs()) {
             return 0.0;
         }

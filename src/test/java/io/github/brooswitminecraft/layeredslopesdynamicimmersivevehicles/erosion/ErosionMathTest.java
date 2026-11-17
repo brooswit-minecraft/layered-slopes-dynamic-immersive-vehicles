@@ -1,6 +1,7 @@
 package io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -80,6 +81,40 @@ class ErosionMathTest {
         double softChance = ErosionMath.successChance(1000.0, cfg.referenceLoadKg(), 0.5, 2.5, cfg);
         double hardChance = ErosionMath.successChance(1000.0, cfg.referenceLoadKg(), 50.0, 1200.0, cfg);
         assertTrue(softChance > hardChance);
+    }
+
+    @Test
+    void zeroOrNegativeWheelLoadIsAnExplicitNoOp() {
+        // Regression (PR #1 review 54720): without this guard, loadFactor's clamp pulls
+        // wheelLoadKg=0 UP to minLoadFactor=0.25 and returns a nonzero chance for a wheel
+        // bearing no physical load at all. Must short-circuit to 0.0 before that clamp runs.
+        assertEquals(0.0, ErosionMath.successChance(10.15, 0.0, 0.0, 0.0, cfg));
+        assertEquals(0.0, ErosionMath.successChance(10.15, -50.0, 0.0, 0.0, cfg));
+        // Confirm it's a deliberate guard, not accidental: an ordinary small positive load still
+        // clamps UP to minLoadFactor and erodes, same as before.
+        assertTrue(ErosionMath.successChance(10.15, 1.0, 0.0, 0.0, cfg) > 0.0);
+    }
+
+    @Test
+    void nonFiniteRuntimeInputsFailClosedToZero() {
+        // Regression (PR #1 review 54720): +Infinity previously saturated to a maximum chance
+        // and NaN propagated through the whole pipeline. Unsupported/invalid telemetry must fail
+        // closed instead.
+        assertEquals(0.0, ErosionMath.successChance(Double.POSITIVE_INFINITY, cfg.referenceLoadKg(), 0.0, 0.0, cfg));
+        assertEquals(0.0, ErosionMath.successChance(10.15, Double.POSITIVE_INFINITY, 0.0, 0.0, cfg));
+        assertEquals(0.0, ErosionMath.successChance(Double.NaN, cfg.referenceLoadKg(), 0.0, 0.0, cfg));
+        assertEquals(0.0, ErosionMath.successChance(10.15, Double.NaN, 0.0, 0.0, cfg));
+        assertEquals(0.0, ErosionMath.successChance(10.15, cfg.referenceLoadKg(), Double.NaN, 0.0, cfg));
+        assertEquals(0.0, ErosionMath.successChance(10.15, cfg.referenceLoadKg(), 0.0, Double.POSITIVE_INFINITY, cfg));
+    }
+
+    @Test
+    void invalidConfigSnapshotFailsClosedToZero() {
+        // Regression (PR #1 review 54720): require a valid config snapshot at this integration
+        // boundary rather than trusting an arbitrary caller-constructed ErosionConfig.
+        ErosionConfig invalid = new ErosionConfig(0.15, 0.0, 10.0, 300.0, 3.0, 0.25, 4.0); // base=0 is invalid
+        assertFalse(invalid.isValid());
+        assertEquals(0.0, ErosionMath.successChance(10.15, cfg.referenceLoadKg(), 0.0, 0.0, invalid));
     }
 
     @Test

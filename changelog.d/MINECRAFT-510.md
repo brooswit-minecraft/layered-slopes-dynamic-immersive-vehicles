@@ -8,3 +8,11 @@ bump: minor
   scaffold, DIV/Layered Slopes/Layered Slope Grading integration, protection gate, and GameTest
   acceptance evidence are deferred to a later slice of this ticket's bounded implementation
   sequence (see README.md Status).
+
+### Fixed
+- `ErosionMath.successChance` now explicitly no-ops on zero/negative `wheelLoadKg` instead of
+  letting `loadFactor`'s clamp pull it up to `minLoadFactor` and return a nonzero chance for a
+  wheel bearing no physical load (PR #1 review finding).
+- Fails closed to 0.0 at the `successChance` integration boundary on non-finite runtime inputs
+  (NaN/Infinity slip, load, hardness, or blast resistance) or an invalid config snapshot, instead
+  of propagating NaN or saturating to a maximum chance.
