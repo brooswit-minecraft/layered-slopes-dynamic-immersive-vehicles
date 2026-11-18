@@ -66,9 +66,14 @@ public final class ErosionModConfigGameTests {
         ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, pos);
         BlockPos absolutePos = helper.absolutePos(pos);
 
+        // Reads the LIVE erosionEnabled flag from the real registered config (the thing this
+        // test exists to prove), but keeps the roll's own tuning deterministic
+        // (GUARANTEED_CHANCE_CONFIG's extreme-but-valid values) rather than the real registered
+        // tuning defaults, which do not guarantee a successful roll for a fixed seed -- the roll
+        // succeeding or failing is ErosionMathTest's concern, not this test's.
         ErosionAttempt.Outcome before = ErosionAttempt.attempt(level, absolutePos,
                 ErosionAttemptGameTests.SLIP_ABOVE_THRESHOLD_MS, ErosionAttemptGameTests.REFERENCE_LOAD_KG,
-                RandomSource.create(1), ErosionModConfig.OVERRIDES.current(), new ErosionDedup());
+                RandomSource.create(1), guaranteedChanceWithLiveEnabledFlag(), new ErosionDedup());
         helper.assertTrue(before == ErosionAttempt.Outcome.DISABLED,
                 "expected DISABLED before the live edit, got " + before);
 
@@ -85,7 +90,7 @@ public final class ErosionModConfigGameTests {
             ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, pos);
             ErosionAttempt.Outcome after = ErosionAttempt.attempt(level, absolutePos,
                     ErosionAttemptGameTests.SLIP_ABOVE_THRESHOLD_MS, ErosionAttemptGameTests.REFERENCE_LOAD_KG,
-                    RandomSource.create(1), ErosionModConfig.OVERRIDES.current(), new ErosionDedup());
+                    RandomSource.create(1), guaranteedChanceWithLiveEnabledFlag(), new ErosionDedup());
             helper.assertTrue(after == ErosionAttempt.Outcome.APPLIED,
                     "after the observed live reload to erosionEnabled=true, expected APPLIED, got " + after);
         } catch (Throwable t) {
@@ -109,6 +114,18 @@ public final class ErosionModConfigGameTests {
         }
 
         helper.succeed();
+    }
+
+    /**
+     * {@code ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG}'s extreme-but-valid tuning
+     * (chance clamps to exactly 1.0, so any seed's roll succeeds), but with {@code
+     * erosionEnabled} read live from {@link ErosionModConfig#OVERRIDES} -- so this test's roll
+     * outcome is deterministic while its enabled/disabled outcome still genuinely depends on the
+     * real registered config's current value.
+     */
+    private static ErosionConfig guaranteedChanceWithLiveEnabledFlag() {
+        return new ErosionConfig(0.15, 1000.0, 10.0, 300.0, 3.0, 0.25, 4.0,
+                ErosionModConfig.OVERRIDES.current().erosionEnabled());
     }
 
     private static void rewriteConfigFile(boolean erosionEnabled) {
