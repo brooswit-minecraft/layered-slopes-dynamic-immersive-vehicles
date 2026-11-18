@@ -1,6 +1,5 @@
 package io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -8,98 +7,123 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionProtectionGate.CoverageArea;
+import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionProtectionGate.ProtectionAdapter;
 
 class ErosionProtectionGateTest {
+
+    private static ProtectionAdapter adapter(boolean sourceDestination, boolean propagation, String description) {
+        return new ProtectionAdapter() {
+            @Override
+            public boolean supportsSourceDestinationAuthorization() {
+                return sourceDestination;
+            }
+
+            @Override
+            public boolean supportsNeighborCaveInPropagation() {
+                return propagation;
+            }
+
+            @Override
+            public String describe() {
+                return description;
+            }
+        };
+    }
 
     @Test
     void defaultsToNotAssertedFailingClosed() {
         ErosionProtectionGate gate = new ErosionProtectionGate();
         assertFalse(gate.isAsserted());
-        for (CoverageArea area : CoverageArea.values()) {
-            assertFalse(gate.isAreaCovered(area));
-            assertNull(gate.evidenceFor(area));
-        }
+        assertNull(gate.evidenceDescription());
     }
 
     @Test
-    void sourceDestinationOnlyCoverageDoesNotOpenTheGate() {
-        // Regression (PR #3 review 54845): this is EXACTLY the insufficient coverage the gate
-        // must reject -- grading's merged SmoothingAuthorizationEvent covers source/destination
-        // authorization only, and that alone must never be able to turn erosion on.
+    void anAdapterThatOnlyClaimsSourceDestinationSupportKeepsTheGateClosed() {
+        // Regression (PR #3 reviews 54845/54853): a source/destination-only adapter must deny,
+        // no matter how the claim is worded -- this checks the adapter's OWN boolean method,
+        // not a trusted description string.
         ErosionProtectionGate gate = new ErosionProtectionGate();
-        gate.assertCoverage(CoverageArea.SOURCE_DESTINATION_AUTHORIZATION,
-                "SmoothingAuthorizationEvent, verified against the cancellation/stale-plan regressions on grading PR #2");
+        gate.assertCoverage(adapter(true, false, "SmoothingAuthorizationEvent, grading PR #2 -- propagation not implemented"));
         assertFalse(gate.isAsserted());
-        assertTrue(gate.isAreaCovered(CoverageArea.SOURCE_DESTINATION_AUTHORIZATION));
-        assertFalse(gate.isAreaCovered(CoverageArea.NEIGHBOR_CAVE_IN_PROPAGATION));
     }
 
     @Test
-    void unsupportedOrIncompleteProtectionCannotAuthorizeErosion() {
-        // Same regression, stated the way the review framed it: an unsupported/incomplete
-        // propagation area must leave the gate closed no matter what text accompanies it.
+    void anAdapterThatClaimsBothAreasInTextButActuallyReportsOnlyOneStillDeniesInPractice() {
+        // Same regression, worded the way 54853 framed it: even if the description text names
+        // both areas, the gate only trusts the adapter's own boolean methods -- if
+        // supportsNeighborCaveInPropagation() reports false, no description can override that.
         ErosionProtectionGate gate = new ErosionProtectionGate();
-        gate.assertCoverage(CoverageArea.SOURCE_DESTINATION_AUTHORIZATION, "fully covered and tested");
-        assertFalse(gate.isAsserted(), "a single covered area must not authorize erosion while any other remains open");
-    }
-
-    @Test
-    void onlyAssertingEveryAreaOpensTheGate() {
-        ErosionProtectionGate gate = new ErosionProtectionGate();
-        gate.assertCoverage(CoverageArea.SOURCE_DESTINATION_AUTHORIZATION, "SmoothingAuthorizationEvent, grading PR #2");
+        gate.assertCoverage(adapter(true, false,
+                "claims SOURCE_DESTINATION_AUTHORIZATION and NEIGHBOR_CAVE_IN_PROPAGATION are both covered"));
         assertFalse(gate.isAsserted());
+    }
 
-        gate.assertCoverage(CoverageArea.NEIGHBOR_CAVE_IN_PROPAGATION, "real propagation adapter, verified against X");
+    @Test
+    void anAdapterSupportingNeitherAreaKeepsTheGateClosed() {
+        ErosionProtectionGate gate = new ErosionProtectionGate();
+        gate.assertCoverage(adapter(false, false, "no real integration yet"));
+        assertFalse(gate.isAsserted());
+    }
+
+    @Test
+    void onlyAnAdapterSupportingBothAreasOpensTheGate() {
+        ErosionProtectionGate gate = new ErosionProtectionGate();
+        gate.assertCoverage(adapter(true, true, "real source/destination AND propagation adapter, verified against X"));
         assertTrue(gate.isAsserted());
-        assertEquals("SmoothingAuthorizationEvent, grading PR #2",
-                gate.evidenceFor(CoverageArea.SOURCE_DESTINATION_AUTHORIZATION));
-        assertEquals("real propagation adapter, verified against X",
-                gate.evidenceFor(CoverageArea.NEIGHBOR_CAVE_IN_PROPAGATION));
     }
 
     @Test
-    void blankOrNullEvidenceIsRejected() {
-        ErosionProtectionGate gate = new ErosionProtectionGate();
-        assertThrows(IllegalArgumentException.class,
-                () -> gate.assertCoverage(CoverageArea.SOURCE_DESTINATION_AUTHORIZATION, null));
-        assertThrows(IllegalArgumentException.class,
-                () -> gate.assertCoverage(CoverageArea.SOURCE_DESTINATION_AUTHORIZATION, ""));
-        assertThrows(IllegalArgumentException.class,
-                () -> gate.assertCoverage(CoverageArea.SOURCE_DESTINATION_AUTHORIZATION, "   "));
-        assertFalse(gate.isAreaCovered(CoverageArea.SOURCE_DESTINATION_AUTHORIZATION));
-    }
+    void theGateIsReCheckedLiveNotCachedFromTheMomentOfAssertion() {
+        // isAsserted() consults the adapter's methods every call -- a mutable test adapter whose
+        // reported support changes must be reflected immediately, proving nothing was cached.
+        boolean[] propagationSupported = {true};
+        ProtectionAdapter mutableAdapter = new ProtectionAdapter() {
+            @Override
+            public boolean supportsSourceDestinationAuthorization() {
+                return true;
+            }
 
-    @Test
-    void nullAreaIsRejected() {
-        ErosionProtectionGate gate = new ErosionProtectionGate();
-        assertThrows(IllegalArgumentException.class, () -> gate.assertCoverage(null, "evidence"));
-    }
+            @Override
+            public boolean supportsNeighborCaveInPropagation() {
+                return propagationSupported[0];
+            }
 
-    @Test
-    void revokingOneAreaClosesTheGateAgain() {
+            @Override
+            public String describe() {
+                return "mutable test adapter";
+            }
+        };
         ErosionProtectionGate gate = new ErosionProtectionGate();
-        gate.assertCoverage(CoverageArea.SOURCE_DESTINATION_AUTHORIZATION, "a");
-        gate.assertCoverage(CoverageArea.NEIGHBOR_CAVE_IN_PROPAGATION, "b");
+        gate.assertCoverage(mutableAdapter);
         assertTrue(gate.isAsserted());
 
-        gate.revoke(CoverageArea.NEIGHBOR_CAVE_IN_PROPAGATION);
-        assertFalse(gate.isAsserted());
-        assertTrue(gate.isAreaCovered(CoverageArea.SOURCE_DESTINATION_AUTHORIZATION));
-        assertFalse(gate.isAreaCovered(CoverageArea.NEIGHBOR_CAVE_IN_PROPAGATION));
+        propagationSupported[0] = false;
+        assertFalse(gate.isAsserted(), "a live capability regression must close the gate immediately, not stay cached open");
     }
 
     @Test
-    void revokeAllClosesTheGateCompletely() {
+    void nullAdapterIsRejected() {
         ErosionProtectionGate gate = new ErosionProtectionGate();
-        gate.assertCoverage(CoverageArea.SOURCE_DESTINATION_AUTHORIZATION, "a");
-        gate.assertCoverage(CoverageArea.NEIGHBOR_CAVE_IN_PROPAGATION, "b");
+        assertThrows(IllegalArgumentException.class, () -> gate.assertCoverage(null));
+    }
+
+    @Test
+    void blankDescribeIsRejected() {
+        ErosionProtectionGate gate = new ErosionProtectionGate();
+        assertThrows(IllegalArgumentException.class, () -> gate.assertCoverage(adapter(true, true, null)));
+        assertThrows(IllegalArgumentException.class, () -> gate.assertCoverage(adapter(true, true, "")));
+        assertThrows(IllegalArgumentException.class, () -> gate.assertCoverage(adapter(true, true, "   ")));
+        assertFalse(gate.isAsserted());
+    }
+
+    @Test
+    void revokeAllClosesTheGateAgain() {
+        ErosionProtectionGate gate = new ErosionProtectionGate();
+        gate.assertCoverage(adapter(true, true, "fully covered"));
         assertTrue(gate.isAsserted());
 
         gate.revokeAll();
         assertFalse(gate.isAsserted());
-        for (CoverageArea area : CoverageArea.values()) {
-            assertFalse(gate.isAreaCovered(area));
-        }
+        assertNull(gate.evidenceDescription());
     }
 }

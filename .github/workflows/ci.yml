@@ -27,15 +27,18 @@ jobs:
       - name: Check the mod does not require a newer NeoForge than the pack runs
         run: python3 scripts/check_neoforge_floor.py
 
-      # NeoForge mod scaffold + pinned layered-slopes/layered-slope-grading dependencies
-      # (MINECRAFT-510 slice 2). No GameTests exist yet -- there is no erosion consumer or any
-      # other gameplay behavior to test, only the mod scaffold itself. A `runGameTestServer` step
-      # deliberately is NOT added here yet: confirmed live that it fails with "No test functions
-      # were given!" when a mod declares zero @GameTest methods, which check_gametest_count.py
-      # would correctly treat as a failure, not a vacuous pass -- so there is nothing this step
-      # could honestly assert yet. Add both once the first real GameTest exists.
       - name: Build and test
         run: ./gradlew build --no-daemon
+
+      # StandaloneBootGameTests.theGameTestHarnessBootsForThisMod is the first real GameTest
+      # (trivial -- no erosion consumer yet, only proof the harness boots for this mod).
+      # check_gametest_count.py fails closed unless exactly this count completed and passed, not
+      # just a green exit code.
+      - name: Run GameTests
+        run: |
+          set -o pipefail
+          ./gradlew runGameTestServer --no-daemon 2>&1 | tee gametest.log
+          python3 scripts/check_gametest_count.py gametest.log
 
       - name: Upload mod jar
         uses: actions/upload-artifact@v4

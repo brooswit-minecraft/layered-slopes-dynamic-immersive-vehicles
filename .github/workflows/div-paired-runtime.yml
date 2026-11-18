@@ -1,11 +1,15 @@
 name: DIV paired-runtime check (opt-in)
 
-# Opt-in, workflow_dispatch-only: never runs on an ordinary push or PR. MINECRAFT-510's actual
-# DIV dependency is a fresh local build (DIV ships no stable release to pin by version/sha512),
-# so this is the one place that build happens at all, and is the "untested environment where
-# DIV's own equivalent build succeeds" (direction, Jira comment 54843) -- this mod's own local
-# sandbox could not reliably do a fresh NeoForge decompile/recompile at all, regardless of
-# version, so the question moved here rather than more local retries.
+# Opt-in: never runs on an ordinary push, and only runs on a pull_request when THIS workflow
+# file itself changed (so the experiment can be validated before merge without merging merely
+# to unlock workflow_dispatch -- review 54853/54854 -- and without running this expensive job on
+# every ordinary PR). workflow_dispatch becomes available once this file exists on main.
+#
+# MINECRAFT-510's actual DIV dependency is a fresh local build (DIV ships no stable release to
+# pin by version/sha512), so this is the one place that build happens at all, and is the
+# "untested environment where DIV's own equivalent build succeeds" (direction, comment 54843) --
+# this mod's own local sandbox could not reliably do a fresh NeoForge decompile/recompile at
+# all, regardless of version, so the question moved here rather than more local retries.
 on:
   workflow_dispatch:
     inputs:
@@ -13,6 +17,9 @@ on:
         description: 'DIV commit/branch/tag to build against'
         required: true
         default: '958e64551991b7d5c44520bf60d18034ebfa0df6'
+  pull_request:
+    paths:
+      - '.github/workflows/div-paired-runtime.yml'
 
 permissions:
   contents: read
@@ -31,12 +38,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: brooswit-minecraft/dynamic-immersive-vehicles
-          ref: ${{ inputs.divRef }}
+          # workflow_dispatch lets the caller pick a ref; a plain pull_request run (this
+          # workflow file's own validation path) always uses the known-good default commit.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.divRef || '958e64551991b7d5c44520bf60d18034ebfa0df6' }}
           path: div
 
-      - name: Record the actual DIV commit built
+      - name: Record the actual DIV commit checked out
+        id: divcommit
         working-directory: div
-        run: git rev-parse HEAD
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -56,16 +66,24 @@ jobs:
         working-directory: div
         run: gradle --no-daemon --stacktrace clean build -x test
 
-      - name: Locate the built DIV jar
+      - name: Verify the exact expected DIV jar exists (not just "some jar")
         id: divjar
         working-directory: div
         run: |
-          jar=$(find build/libs -maxdepth 1 -name '*.jar' | head -n1)
-          if [ -z "$jar" ]; then
-            echo "::error::no DIV jar found under div/build/libs"
+          expected="build/libs/dynamic-immersive-vehicles-0.1.0-SNAPSHOT.jar"
+          if [ ! -f "$expected" ]; then
+            echo "::error::expected DIV artifact '$expected' was not produced -- found instead:"
+            ls -la build/libs/ || true
             exit 1
           fi
-          echo "path=$(readlink -f "$jar")" >> "$GITHUB_OUTPUT"
+          actual_count=$(find build/libs -maxdepth 1 -name '*.jar' | wc -l)
+          if [ "$actual_count" -ne 1 ]; then
+            echo "::error::expected exactly 1 jar under build/libs, found $actual_count:"
+            ls -la build/libs/
+            exit 1
+          fi
+          echo "path=$(readlink -f "$expected")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$expected" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Build this mod against DIV + its own required dependencies (mts, Sable, Sable Companion)
         working-directory: compat
@@ -82,8 +100,13 @@ jobs:
             "-PdivLocalJar=${{ steps.divjar.outputs.path }}" \
             -PpairedRuntime=true \
             2>&1 | tee paired-runtime-boot.log
+          # StandaloneBootGameTests.theGameTestHarnessBootsForThisMod is a real, passing test as
+          # of this slice -- this now has a genuine successful terminal result to require,
+          # rather than the guaranteed-nonzero "No test functions were given!" a zero-test
+          # runGameTestServer always produces (review 54853/54854).
+          python3 scripts/check_gametest_count.py paired-runtime-boot.log
 
-      - name: Verify every expected mod actually loaded (not just a clean exit code)
+      - name: Verify every DIV-required mod actually loaded (not just this mod's own test passing)
         working-directory: compat
         run: |
           echo "--- Mod List from the boot log ---"
@@ -94,17 +117,39 @@ jobs:
               exit 1
             fi
           done
-          if grep -qi "Found 0 mod requirements missing (0 mandatory, 0 optional)" paired-runtime-boot.log; then
-            echo "0 missing mod requirements confirmed"
-          else
+          if ! grep -qi "Found 0 mod requirements missing (0 mandatory, 0 optional)" paired-runtime-boot.log; then
             echo "::error::did not find the expected '0 mod requirements missing' line -- a dependency failed to resolve"
             exit 1
           fi
+          echo "0 missing mod requirements confirmed, all 7 expected mod ids present"
 
-      - name: Upload the full paired-runtime boot log regardless of outcome
+      - name: Record an immutable resolved-dependency manifest
+        working-directory: compat
+        run: |
+          {
+            echo "# DIV paired-runtime manifest -- $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "div_commit=${{ steps.divcommit.outputs.sha }}"
+            echo "div_jar=dynamic-immersive-vehicles-0.1.0-SNAPSHOT.jar"
+            echo "div_jar_sha256=${{ steps.divjar.outputs.sha256 }}"
+            echo "layeredslopes_version=$(grep '^layeredslopes_version=' gradle.properties | cut -d= -f2)"
+            echo "layeredslopes_sha512=$(grep '^layeredslopes_sha512=' gradle.properties | cut -d= -f2)"
+            echo "layeredslopegrading_version=$(grep '^layeredslopegrading_version=' gradle.properties | cut -d= -f2)"
+            echo "layeredslopegrading_sha512=$(grep '^layeredslopegrading_sha512=' gradle.properties | cut -d= -f2)"
+            echo "mts_coordinate=curse.maven:minecraft-transport-simulator-286703:7926606"
+            echo "sable_coordinate=dev.ryanhcode.sable:sable-neoforge-1.21.1:2.0.5"
+            echo "sablecompanion_coordinate=dev.ryanhcode.sable-companion:sable-companion-common-1.21.1:1.6.0"
+            echo "--- resolved paired-runtime jar files and their sha256 ---"
+            find ~/.gradle/caches/modules-2 -iname '*minecraft-transport-simulator*.jar' -o -iname '*sable*.jar' 2>/dev/null \
+              | sort | xargs -r sha256sum
+          } > paired-runtime-manifest.txt
+          cat paired-runtime-manifest.txt
+
+      - name: Upload the boot log and resolved-dependency manifest regardless of outcome
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: div-paired-runtime-boot-log
-          path: compat/paired-runtime-boot.log
+          name: div-paired-runtime-evidence
+          path: |
+            compat/paired-runtime-boot.log
+            compat/paired-runtime-manifest.txt
           if-no-files-found: warn
