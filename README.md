@@ -181,20 +181,30 @@ This is a bounded, multi-slice implementation. Current slice:
       production server has no GameTest harness); success is the real startup/shutdown/mod-list/
       config evidence, never a bare process exit code.
 
-      **Not yet covered, named explicitly** (review 55009/55019): DIV-alone/base-DIV isolation,
-      and the full DIV replacement stack (compat + DIV + layered-slopes/grading together). "No
-      stable DIV release" is NOT a blocker here -- `div-paired-runtime.yml` already builds DIV
-      fresh from a verified, pinned commit SHA for exactly this purpose; a future slice should
-      reuse that same source-build pipeline (hash/manifest the real packaged jar and its
-      resolved dependencies, then boot it the same way this workflow boots the current stack),
-      an open next CI slice rather than something blocked on a nonexistent prerequisite. This is
-      independent of the MINECRAFT-545-gated `PhysicsBridge`/contact-telemetry work below, which
+- [x] DIV artifact-based isolation and full packaged replacement-stack smoke (direction, comment
+      55019/55032): an opt-in `div-replacement-stack-smoke.yml` workflow reuses
+      `div-paired-runtime.yml`'s existing immutable-pinned-commit-SHA DIV source build (no stable,
+      pinnable DIV release is required for this). `div-alone-isolation-smoke` builds DIV fresh
+      from that pinned SHA, resolves DIV's own real required runtime dependencies (mts, Sable,
+      Sable Companion) via the `-PpairedRuntime=true` `copyPairedRuntimeJars` task, and boots a
+      real NeoForge dedicated server with ONLY DIV + those deps -- this compat mod and
+      layered-slopes/layered-slope-grading deliberately absent -- proving DIV boots standalone
+      with no dependency on either. `full-replacement-stack-smoke` additionally builds this mod's
+      own real packaged jar and the pinned layered-slopes/layered-slope-grading release jars, and
+      boots the real, complete 7-modid replacement stack (DIV + its deps + layered-slopes +
+      layered-slope-grading + this compat mod) together, requiring the real `Done (` line, all 7
+      expected mod ids, `Found 0 mod requirements missing`, a real graceful shutdown (all three
+      vanilla/NeoForge shutdown markers independently), and the real generated
+      `layeredslopesdynamicimmersivevehicles-server.toml` genuinely defaulting `erosionEnabled` to
+      `false`. Records an immutable sha256/sha512 artifact-hash manifest naming the DIV commit SHA,
+      the DIV jar's hash, this mod's own jar's hash, and the existing layered-slopes/
+      layered-slope-grading version+sha512 pins. Neither job runs any GameTest; success is the
+      real startup/shutdown/mod-list/config/manifest content, never a bare process exit code. This
+      is independent of the MINECRAFT-545-gated `PhysicsBridge`/contact-telemetry work below, which
       remains a real, separate hold.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), DIV-alone isolation and the full DIV replacement-stack smoke case (an open next CI
-      slice reusing `div-paired-runtime.yml`'s pinned-commit source build, not blocked on a
-      public DIV release), multiplayer sync, and gameplay acceptance evidence.
+      above), multiplayer sync, and gameplay acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 defaults to OFF via this mod's own real `erosionEnabled` server config (default `false`, see

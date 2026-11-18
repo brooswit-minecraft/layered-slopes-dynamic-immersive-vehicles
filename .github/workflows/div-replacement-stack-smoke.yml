@@ -1,0 +1,371 @@
+name: DIV replacement-stack smoke (opt-in)
+
+# Opt-in: never runs on an ordinary push, and only runs on a pull_request when THIS workflow
+# file itself changed (same shape as div-paired-runtime.yml/pinned-jar-smoke-acceptance.yml).
+# workflow_dispatch becomes available once this file exists on main.
+#
+# Direction (comment 55019/55032): "no stable, pinnable DIV release" is NOT a blocker to
+# DIV-alone/base-DIV isolation or the full DIV replacement-stack smoke -- reuse the SAME
+# immutable-SHA DIV source build div-paired-runtime.yml already uses, but boot the REAL
+# packaged jars (this mod's own `./gradlew jar`, not the dev-mode `gameTestServer` source-set
+# classpath div-paired-runtime.yml exercises) with a real NeoForge-installer-produced dedicated
+# server, the same discipline pinned-jar-smoke-acceptance.yml established for the
+# layered-slopes-only stack.
+#
+# `div-alone-isolation-smoke`: DIV + its own real required runtime dependencies (mts, Sable,
+# Sable Companion, at the exact coordinates DIV's own build.gradle pins) ALONE -- this compat
+# mod and layered-slopes/layered-slope-grading deliberately absent -- proving DIV boots
+# standalone with no dependency on this compat mod or Layered Slopes.
+#
+# `full-replacement-stack-smoke`: DIV + its own deps + layered-slopes + layered-slope-grading +
+# this compat mod's own packaged jar, all together -- the real, complete replacement stack.
+# Requires the real `Done (` line, all 6 expected mod ids in the real Mod List, a real graceful
+# shutdown (all three vanilla/NeoForge shutdown markers independently, per review 55015's
+# lesson), and the real generated compat-mod config defaulting `erosionEnabled` to `false`.
+# Records a sha256 manifest of the DIV commit/jar and this mod's own jar alongside the existing
+# sha512-pinned layered-slopes/layered-slope-grading versions.
+#
+# Neither job runs any GameTest (a real production server has no GameTest harness); success
+# evidence is the real startup/shutdown/mod-list/config content, never a bare process exit code.
+on:
+  workflow_dispatch:
+    inputs:
+      divRef:
+        description: 'DIV commit/branch/tag to build against'
+        required: true
+        default: '958e64551991b7d5c44520bf60d18034ebfa0df6'
+  pull_request:
+    paths:
+      - '.github/workflows/div-replacement-stack-smoke.yml'
+      - 'build.gradle'
+      - 'gradle.properties'
+      - 'settings.gradle'
+      - 'gradle/wrapper/**'
+      - 'src/**'
+
+permissions:
+  contents: read
+
+jobs:
+  div-alone-isolation-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+        with:
+          path: compat
+
+      - name: Check out DIV at the pinned ref
+        uses: actions/checkout@v4
+        with:
+          repository: brooswit-minecraft/dynamic-immersive-vehicles
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.divRef || '958e64551991b7d5c44520bf60d18034ebfa0df6' }}
+          path: div
+
+      - name: Record the actual DIV commit checked out
+        id: divcommit
+        working-directory: div
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Gradle 8.8 (matches DIV's own ci.yml exactly)
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.8'
+
+      - name: Build DIV
+        working-directory: div
+        run: gradle --no-daemon --stacktrace clean build -x test
+
+      - name: Verify the exact expected DIV jar exists
+        id: divjar
+        working-directory: div
+        run: |
+          expected="build/libs/dynamic-immersive-vehicles-0.1.0-SNAPSHOT.jar"
+          if [ ! -f "$expected" ]; then
+            echo "::error::expected DIV artifact '$expected' was not produced -- found instead:"
+            ls -la build/libs/ || true
+            exit 1
+          fi
+          actual_count=$(find build/libs -maxdepth 1 -name '*.jar' | wc -l)
+          if [ "$actual_count" -ne 1 ]; then
+            echo "::error::expected exactly 1 jar under build/libs, found $actual_count:"
+            ls -la build/libs/
+            exit 1
+          fi
+          echo "path=$(readlink -f "$expected")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$expected" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve DIV's own required runtime dependencies (mts, Sable, Sable Companion) into a plain directory
+        working-directory: compat
+        run: ./gradlew copyPairedRuntimeJars -PpairedRuntime=true --no-daemon
+
+      - name: Install a real NeoForge dedicated-server distribution at DIV's own required floor
+        run: |
+          mkdir server && cd server
+          curl -sL -o installer.jar "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.265/neoforge-21.1.265-installer.jar"
+          java -jar installer.jar --installServer
+          echo "eula=true" > eula.txt
+          mkdir mods
+
+      - name: Drop ONLY DIV and its own required deps into mods/ -- no compat mod, no Layered Slopes at all
+        run: |
+          cp "${{ steps.divjar.outputs.path }}" server/mods/
+          cp compat/build/pairedRuntimeJars/*.jar server/mods/
+          ls -la server/mods/
+
+      - name: Boot the real distribution with ONLY DIV + its own deps, then stop it gracefully
+        working-directory: server
+        run: |
+          set -o pipefail
+          mkfifo stdin.pipe
+          exec 9<>stdin.pipe
+          timeout 150 ./run.sh --nogui < stdin.pipe > boot.log 2>&1 &
+          boot_pid=$!
+          for i in $(seq 1 60); do
+            if grep -qE 'Done \(|FAILED TO START|ModLoadingException|Failed to start' boot.log 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          echo "stop" > stdin.pipe
+          graceful=false
+          for i in $(seq 1 30); do
+            if ! kill -0 "$boot_pid" 2>/dev/null; then
+              graceful=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$graceful" != "true" ]; then
+            echo "::warning::server did not exit on its own within 30s of 'stop' -- force killing as a fallback"
+            kill -9 "$boot_pid" 2>/dev/null || true
+          fi
+          exec 9>&-
+          rm -f stdin.pipe
+          echo "graceful=${graceful}" > shutdown-status.txt
+          cat boot.log
+
+      - name: Verify DIV boots standalone with no dependency on this compat mod or Layered Slopes
+        working-directory: server
+        run: |
+          if ! grep -q 'Done (' boot.log; then
+            echo "::error::expected a real 'Done (' startup line -- DIV did not boot standalone successfully"
+            exit 1
+          fi
+          for modid in '(dynamicimmersivevehicles)' '(mts)' '(sable)' '(sablecompanion)'; do
+            if ! grep -qF "$modid" boot.log; then
+              echo "::error::expected '$modid' in the real Mod List, not found"
+              exit 1
+            fi
+          done
+          for modid in '(layeredslopes)' '(layeredslopegrading)' '(layeredslopesdynamicimmersivevehicles)'; do
+            if grep -qF "$modid" boot.log; then
+              echo "::error::found '$modid' in the Mod List, but its jar was deliberately never placed in mods/ -- something is wrong with this job's isolation"
+              exit 1
+            fi
+          done
+          if ! grep -qF 'graceful=true' shutdown-status.txt; then
+            echo "::error::the server did not exit on its own within 30s of the real stdin 'stop' command"
+            exit 1
+          fi
+          for marker in 'Stopping server' 'Saving worlds' 'All dimensions are saved'; do
+            if ! grep -qF "$marker" boot.log; then
+              echo "::error::expected the real vanilla/NeoForge graceful-shutdown log line '$marker' -- not found"
+              exit 1
+            fi
+          done
+          echo "confirmed: DIV and its own required deps boot successfully standalone, with no dependency on this compat mod or Layered Slopes, and shut down gracefully"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: div-alone-isolation-smoke-evidence
+          path: |
+            server/boot.log
+            server/shutdown-status.txt
+          if-no-files-found: warn
+
+  full-replacement-stack-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+        with:
+          path: compat
+
+      - name: Check out DIV at the pinned ref
+        uses: actions/checkout@v4
+        with:
+          repository: brooswit-minecraft/dynamic-immersive-vehicles
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.divRef || '958e64551991b7d5c44520bf60d18034ebfa0df6' }}
+          path: div
+
+      - name: Record the actual DIV commit checked out
+        id: divcommit
+        working-directory: div
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Gradle 8.8 (matches DIV's own ci.yml exactly)
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.8'
+
+      - name: Build DIV
+        working-directory: div
+        run: gradle --no-daemon --stacktrace clean build -x test
+
+      - name: Verify the exact expected DIV jar exists
+        id: divjar
+        working-directory: div
+        run: |
+          expected="build/libs/dynamic-immersive-vehicles-0.1.0-SNAPSHOT.jar"
+          if [ ! -f "$expected" ]; then
+            echo "::error::expected DIV artifact '$expected' was not produced -- found instead:"
+            ls -la build/libs/ || true
+            exit 1
+          fi
+          actual_count=$(find build/libs -maxdepth 1 -name '*.jar' | wc -l)
+          if [ "$actual_count" -ne 1 ]; then
+            echo "::error::expected exactly 1 jar under build/libs, found $actual_count:"
+            ls -la build/libs/
+            exit 1
+          fi
+          echo "path=$(readlink -f "$expected")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$expected" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Build this mod's real packaged jar, resolve the pinned base-mod jars and DIV's own required deps
+        working-directory: compat
+        run: |
+          ./gradlew jar downloadLayeredSlopes downloadLayeredSlopeGrading copyPairedRuntimeJars \
+            -PpairedRuntime=true --no-daemon
+
+      - name: Install a real NeoForge dedicated-server distribution at DIV's own required floor
+        run: |
+          mkdir server && cd server
+          curl -sL -o installer.jar "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.265/neoforge-21.1.265-installer.jar"
+          java -jar installer.jar --installServer
+          echo "eula=true" > eula.txt
+          mkdir mods
+
+      - name: Drop the full real replacement stack into mods/
+        run: |
+          mod_jar=$(ls compat/build/libs/*.jar | head -1)
+          cp "$mod_jar" server/mods/
+          cp "${{ steps.divjar.outputs.path }}" server/mods/
+          cp compat/build/pairedRuntimeJars/*.jar server/mods/
+          cp compat/build/layeredslopes/*.jar server/mods/
+          cp compat/build/layeredslopegrading/*.jar server/mods/
+          ls -la server/mods/
+
+      - name: Boot the real distribution with the full real replacement stack, then stop it gracefully
+        working-directory: server
+        run: |
+          set -o pipefail
+          mkfifo stdin.pipe
+          exec 9<>stdin.pipe
+          timeout 150 ./run.sh --nogui < stdin.pipe > boot.log 2>&1 &
+          boot_pid=$!
+          for i in $(seq 1 60); do
+            if grep -qE 'Done \(|FAILED TO START|ModLoadingException|Failed to start' boot.log 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          echo "stop" > stdin.pipe
+          graceful=false
+          for i in $(seq 1 30); do
+            if ! kill -0 "$boot_pid" 2>/dev/null; then
+              graceful=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$graceful" != "true" ]; then
+            echo "::warning::server did not exit on its own within 30s of 'stop' -- force killing as a fallback"
+            kill -9 "$boot_pid" 2>/dev/null || true
+          fi
+          exec 9>&-
+          rm -f stdin.pipe
+          echo "graceful=${graceful}" > shutdown-status.txt
+          cat boot.log
+
+      - name: Verify the full real replacement stack booted, shut down gracefully, and defaults erosionEnabled to false
+        working-directory: server
+        run: |
+          if ! grep -q 'Done (' boot.log; then
+            echo "::error::expected a real 'Done (' startup line -- the server did not boot successfully"
+            exit 1
+          fi
+          for modid in '(layeredslopes)' '(layeredslopegrading)' '(layeredslopesdynamicimmersivevehicles)' '(dynamicimmersivevehicles)' '(mts)' '(sable)' '(sablecompanion)'; do
+            if ! grep -qF "$modid" boot.log; then
+              echo "::error::expected '$modid' in the real Mod List, not found"
+              exit 1
+            fi
+          done
+          if ! grep -qi 'Found 0 mod requirements missing' boot.log; then
+            echo "::error::did not find the expected '0 mod requirements missing' line -- a dependency failed to resolve"
+            exit 1
+          fi
+          if ! grep -qF 'graceful=true' shutdown-status.txt; then
+            echo "::error::the server did not exit on its own within 30s of the real stdin 'stop' command"
+            exit 1
+          fi
+          for marker in 'Stopping server' 'Saving worlds' 'All dimensions are saved'; do
+            if ! grep -qF "$marker" boot.log; then
+              echo "::error::expected the real vanilla/NeoForge graceful-shutdown log line '$marker' -- not found"
+              exit 1
+            fi
+          done
+          config="config/layeredslopesdynamicimmersivevehicles-server.toml"
+          if [ ! -f "$config" ]; then
+            echo "::error::expected the real generated config file at $config -- it was never written"
+            exit 1
+          fi
+          if ! grep -qE '^erosionEnabled\s*=\s*false' "$config"; then
+            echo "::error::expected the real generated config to default erosionEnabled to false, got:"
+            cat "$config"
+            exit 1
+          fi
+          echo "confirmed: the full real replacement stack (DIV + its deps + layered-slopes + layered-slope-grading + this compat mod) booted successfully with 0 missing requirements, shut down gracefully, and defaults erosionEnabled to false"
+
+      - name: Record an immutable artifact-hash manifest
+        if: always()
+        working-directory: compat
+        run: |
+          {
+            echo "# DIV replacement-stack smoke manifest -- $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "div_commit=${{ steps.divcommit.outputs.sha }}"
+            echo "div_jar=dynamic-immersive-vehicles-0.1.0-SNAPSHOT.jar"
+            echo "div_jar_sha256=${{ steps.divjar.outputs.sha256 }}"
+            echo "compat_jar_sha256=$(sha256sum build/libs/*.jar | cut -d' ' -f1)"
+            echo "layeredslopes_version=$(grep '^layeredslopes_version=' gradle.properties | cut -d= -f2)"
+            echo "layeredslopes_sha512=$(grep '^layeredslopes_sha512=' gradle.properties | cut -d= -f2)"
+            echo "layeredslopegrading_version=$(grep '^layeredslopegrading_version=' gradle.properties | cut -d= -f2)"
+            echo "layeredslopegrading_sha512=$(grep '^layeredslopegrading_sha512=' gradle.properties | cut -d= -f2)"
+          } > replacement-stack-manifest.txt
+          cat replacement-stack-manifest.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-replacement-stack-smoke-evidence
+          path: |
+            server/boot.log
+            server/shutdown-status.txt
+            server/config/layeredslopesdynamicimmersivevehicles-server.toml
+            compat/replacement-stack-manifest.txt
+          if-no-files-found: warn
