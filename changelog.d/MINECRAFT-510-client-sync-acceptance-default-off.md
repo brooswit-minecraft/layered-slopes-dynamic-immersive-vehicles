@@ -15,6 +15,11 @@ bump: minor
   packets -- and writing it out for the harness to assert on). Both gated behind system
   properties forwarded only from new, default-false Gradle project properties; an ordinary
   `./gradlew runServer`/`runClient` is completely unaffected.
+- Fixed a real Gradle behavior discovered while building this: `JavaExec`-based run tasks (what
+  every NeoForge moddev run resolves to) do not forward this process's stdin to the forked JVM
+  by default, so `runServer`'s `standardInput` is now wired explicitly -- this also makes a
+  human's own real console input work when running `./gradlew runServer` directly, which it did
+  not before either.
 - This slice proves erosionEnabled's real default (`false`) leaves the world genuinely unchanged
   as observed by an actual, independently-connected client -- not a server-side flag. The
   enabled/one-layer-mass-conservation and rejected/canceled-unchanged cases are separate, later

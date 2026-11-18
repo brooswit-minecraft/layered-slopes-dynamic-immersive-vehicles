@@ -205,8 +205,7 @@ This is a bounded, multi-slice implementation. Current slice:
       real startup/shutdown/mod-list/config/manifest content, never a bare process exit code. This
       is independent of the MINECRAFT-545-gated `PhysicsBridge`/contact-telemetry work below, which
       remains a real, separate hold.
-- [ ] Client-sync acceptance, default-OFF case only -- implemented, not yet CI-verified
-      (direction, comment 55058/55063): an opt-in
+- [x] Client-sync acceptance, default-OFF case only (direction, comment 55058/55063): an opt-in
       `client-sync-acceptance.yml` workflow drives a REAL second process -- a real headless
       NeoForge dev client auto-joining a real dedicated server via vanilla's
       `--quickPlayMultiplayer` -- rather than a server-only GameTest result or an `UPDATE` flag
