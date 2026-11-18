@@ -53,18 +53,26 @@ This is a bounded, multi-slice implementation. Current slice:
 - [x] `ErosionAttempt`: the real per-position orchestration -- dedup claim, the accepted
       MINECRAFT-555 slip-to-probability roll, a shuffled-direction-first-`canSmooth`-accepted
       call into `Smoothing.smooth()`, and the `ErosionProtectionGate` check before any world
-      mutation. Takes a `ServerLevel` (a client-side call cannot even be constructed) and derives
-      dimension/tick from it, never from a caller-supplied value; every candidate position's
-      chunk is confirmed loaded before any block query, never force-loading one. Every real
-      request this builds has `propagationScopeKnown=false` -- no neighbor/cave-in consequence
-      analysis exists yet, so every real call is denied by construction regardless of whether a
-      production adapter exists (see above). Takes slip/load telemetry as plain parameters;
-      makes no assumption about where it comes from, since DIV's own per-wheel contact-telemetry
-      seam is not wired in yet (see below). `ErosionAttemptGameTests` (7 cases: default-closed
-      denial, a granting adapter still denied because propagation scope is never claimed known, a
-      known-scope granting adapter actually applying a move with material conservation verified,
-      per-tick dedup, a denied attempt and a failed roll each still consuming the dedup slot, and
-      no-valid-direction) prove it against a real world, not primitives in isolation.
+      mutation. Takes a `ServerLevel` (a client-side call cannot even be constructed) and asserts
+      `level.getServer().isSameThread()` before touching anything -- the type alone does not rule
+      out an off-thread call. Derives dimension/tick from the level/its server, never from a
+      caller-supplied value; every candidate position's chunk is confirmed loaded before any
+      block query, never force-loading one. Every real request this builds has
+      `propagationScopeKnown=false` -- no neighbor/cave-in consequence analysis exists yet, so
+      every real call is denied by construction regardless of whether a production adapter
+      exists (see above). Takes slip/load telemetry as plain parameters; makes no assumption
+      about where it comes from, since DIV's own per-wheel contact-telemetry seam is not wired in
+      yet (see below). `ErosionAttemptGameTests` (9 cases: default-closed denial, a granting
+      adapter still denied because propagation scope is never claimed known, a known-scope
+      granting adapter actually applying a move with material conservation verified, per-tick
+      dedup, a denied attempt and a failed roll each still consuming the dedup slot,
+      no-valid-direction, an off-thread call denied before touching anything, and an unloaded
+      source denied without force-loading it) prove it against a real world, not primitives in
+      isolation. An independently constructed "unloaded destination" case was not added: the
+      destination chunk-loaded guard is the identical `hasChunkAt` check at the identical call
+      shape as the already-tested source guard, and the small GameTest harness loads its whole
+      structure (plus padding) as one unit, so a genuinely unloaded block immediately adjacent to
+      a loaded one is not practically constructible inside it.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
       above), a concrete propagation/claim-aware `ProtectionAdapter` (its real scope is defined by
@@ -91,7 +99,7 @@ they are plain JUnit 5 tests with no Minecraft/NeoForge dependency.
 ```
 
 Boots a real dedicated server with this mod, `layered-slopes`, and `layered-slope-grading`
-installed and runs the 8 GameTests (boot-only, plus `ErosionAttemptGameTests`' 7 real-world
+installed and runs the 10 GameTests (boot-only, plus `ErosionAttemptGameTests`' 9 real-world
 orchestration cases). Wired into CI via `scripts/check_gametest_count.py`, which fails closed if
 the expected test count regresses. An opt-in `div-paired-runtime.yml` workflow additionally
 builds DIV fresh and boots everything together at DIV's real NeoForge floor.

@@ -8,11 +8,11 @@ BATCH_HEADER = "Running test batch 'defaultBatch:0' (3 tests)...\n"
 class CheckGameTestCountTest(unittest.TestCase):
     def test_default_expected_count_is_wired_to_the_real_current_gametest_count(self):
         # No explicit `expected` passed -- uses the module's real production default, which must
-        # be the actual current GameTest count for this mod (8: StandaloneBootGameTests' 1 plus
-        # ErosionAttemptGameTests' 7), not the UNSET sentinel and not a stale/borrowed number.
-        log = ("Running test batch 'defaultBatch:0' (8 tests)...\n"
-               "=== 8 GAME TESTS COMPLETE IN 1.5s ===\nAll 8 required tests passed :)")
-        self.assertEqual(verify_runtime_log(log), 8)
+        # be the actual current GameTest count for this mod (10: StandaloneBootGameTests' 1 plus
+        # ErosionAttemptGameTests' 9), not the UNSET sentinel and not a stale/borrowed number.
+        log = ("Running test batch 'defaultBatch:0' (10 tests)...\n"
+               "=== 10 GAME TESTS COMPLETE IN 1.5s ===\nAll 10 required tests passed :)")
+        self.assertEqual(verify_runtime_log(log), 10)
 
     def test_unset_sentinel_still_fails_closed_when_explicitly_selected(self):
         # The UNSET-handling guard itself must still work correctly when explicitly selected

@@ -4,6 +4,8 @@ import io.github.brooswitminecraft.layeredslopes.LayeredBlock;
 import io.github.brooswitminecraft.layeredslopes.LayeredSlopesMod;
 import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.LayeredSlopesDynamicImmersiveVehiclesMod;
 
+import java.util.concurrent.atomic.AtomicReference;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
@@ -256,6 +258,82 @@ public final class ErosionAttemptGameTests {
         helper.assertTrue(outcome == ErosionAttempt.Outcome.NO_VALID_DIRECTION,
                 "expected NO_VALID_DIRECTION when every horizontal neighbor is a different, blocking material, got " + outcome);
         helper.assertTrue(helper.getBlockState(pos).equals(before), "the world must stay unmutated");
+        helper.succeed();
+    }
+
+    /**
+     * Regression (review 54880): a {@code ServerLevel} type alone rules out a client call, NOT
+     * an off-thread one. Calling {@code attempt} from a non-server thread must be denied before
+     * touching the level/chunk/dedup state at all, and must consume no dedup slot -- proven by a
+     * same-tick same-position call on the real server thread afterward still succeeding.
+     */
+    @GameTest(template = "flat_platform")
+    public static void anOffThreadCallIsDeniedBeforeTouchingAnythingAndDoesNotConsumeTheDedupSlot(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 2, 1);
+        placeSourceWithOneValidEastNeighbor(helper, pos);
+        BlockState before = helper.getBlockState(pos);
+
+        ErosionProtectionGate gate = new ErosionProtectionGate();
+        gate.assertCoverage(grantingAdapter());
+        ErosionDedup dedup = new ErosionDedup();
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos absolutePos = helper.absolutePos(pos);
+
+        AtomicReference<ErosionAttempt.Outcome> offThreadOutcome = new AtomicReference<>();
+        AtomicReference<Throwable> offThreadError = new AtomicReference<>();
+        Thread thread = new Thread(() -> {
+            try {
+                offThreadOutcome.set(ErosionAttempt.attempt(level, absolutePos,
+                        SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
+                        GUARANTEED_CHANCE_CONFIG, dedup, gate, true));
+            } catch (Throwable t) {
+                offThreadError.set(t);
+            }
+        });
+        thread.start();
+        try {
+            thread.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            helper.fail("interrupted while waiting for the off-thread call");
+            return;
+        }
+
+        helper.assertTrue(offThreadError.get() == null, "the off-thread call must not throw, got " + offThreadError.get());
+        helper.assertTrue(offThreadOutcome.get() == ErosionAttempt.Outcome.OFF_THREAD,
+                "expected OFF_THREAD, got " + offThreadOutcome.get());
+        helper.assertTrue(helper.getBlockState(pos).equals(before), "the off-thread call must not mutate the world");
+
+        ErosionAttempt.Outcome onThreadOutcome = ErosionAttempt.attempt(level, absolutePos,
+                SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(2),
+                GUARANTEED_CHANCE_CONFIG, dedup, gate, true);
+        helper.assertTrue(onThreadOutcome == ErosionAttempt.Outcome.APPLIED,
+                "the off-thread call must not have consumed the dedup slot -- a same-tick on-thread call should still apply, got "
+                        + onThreadOutcome);
+        helper.succeed();
+    }
+
+    /**
+     * Regression (review 54878/54880): a source position whose chunk is not loaded must be
+     * denied without ever force-loading it, and without consuming a dedup slot.
+     */
+    @GameTest(template = "flat_platform")
+    public static void anUnloadedSourceIsDeniedWithoutForceLoadingItOrConsumingTheDedupSlot(GameTestHelper helper) {
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos farAwayPos = new BlockPos(1_000_000, 64, 1_000_000); // far outside any loaded/ticketed chunk
+
+        ErosionProtectionGate gate = new ErosionProtectionGate();
+        gate.assertCoverage(grantingAdapter());
+        ErosionDedup dedup = new ErosionDedup();
+
+        helper.assertTrue(!level.hasChunkAt(farAwayPos), "test precondition: this position must start out unloaded");
+        ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(level, farAwayPos,
+                SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
+                GUARANTEED_CHANCE_CONFIG, dedup, gate, true);
+
+        helper.assertTrue(outcome == ErosionAttempt.Outcome.SOURCE_NOT_LOADED, "expected SOURCE_NOT_LOADED, got " + outcome);
+        helper.assertTrue(!level.hasChunkAt(farAwayPos), "the call must not have force-loaded the chunk as a side effect");
+        helper.assertTrue(dedup.claimedCountForCurrentTick() == 0, "an unloaded source must not consume a dedup slot");
         helper.succeed();
     }
 }

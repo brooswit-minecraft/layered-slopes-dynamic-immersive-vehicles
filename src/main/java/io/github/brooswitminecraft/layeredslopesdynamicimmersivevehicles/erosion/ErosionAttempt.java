@@ -18,11 +18,13 @@ import net.minecraft.world.level.block.state.BlockState;
  * 6/7/10/13/14), and the {@link ErosionProtectionGate} check before any world mutation.
  *
  * <p>Taking {@link ServerLevel} rather than the generic {@code Level} makes a client-side call
- * impossible to even construct, not merely checked at runtime. Dimension and tick are derived
- * from the level/its server, never caller-supplied, so a caller cannot desynchronize the dedup
- * key or the tick from what actually happened. Every candidate position's chunk is confirmed
- * loaded before any {@code BlockState}/{@code Smoothing} query touches it, so this never forces a
- * chunk load (review 54878 finding 2).
+ * impossible to even construct, not merely checked at runtime -- but it does NOT by itself rule
+ * out an off-thread call (review 54880), so {@link #attempt} also asserts {@code
+ * level.getServer().isSameThread()} before touching the level/chunk/dedup state at all. Dimension
+ * and tick are derived from the level/its server, never caller-supplied, so a caller cannot
+ * desynchronize the dedup key or the tick from what actually happened. Every candidate position's
+ * chunk is confirmed loaded before any {@code BlockState}/{@code Smoothing} query touches it, so
+ * this never forces a chunk load (review 54878 finding 2).
  *
  * <p>Every {@link ErosionProtectionGate.MutationRequest} this builds has {@code
  * propagationScopeKnown=false}: no neighbor/cave-in consequence analysis is implemented anywhere
@@ -39,6 +41,8 @@ public final class ErosionAttempt {
 
     /** Why a given attempt did or did not mutate the world. */
     public enum Outcome {
+        /** the calling thread is not the server's own thread -- denied before touching anything. */
+        OFF_THREAD,
         /** case 10: the source position's chunk is not loaded -- never force-load it. */
         SOURCE_NOT_LOADED,
         /** case 13: a different wheel already claimed this (dimension, block, tick) this tick. */
@@ -71,6 +75,9 @@ public final class ErosionAttempt {
     static Outcome attempt(ServerLevel level, BlockPos pos, double slipSpeedMs, double wheelLoadKg,
                             RandomSource random, ErosionConfig config, ErosionDedup dedup,
                             ErosionProtectionGate gate, boolean propagationScopeKnownForTest) {
+        if (!level.getServer().isSameThread()) {
+            return Outcome.OFF_THREAD;
+        }
         if (!level.hasChunkAt(pos)) {
             return Outcome.SOURCE_NOT_LOADED;
         }
