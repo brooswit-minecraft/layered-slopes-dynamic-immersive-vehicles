@@ -12,6 +12,16 @@ package io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosio
  * specific attempt's propagation scope is unknown to it). The erosion consumer MUST call {@link
  * #authorize} for every attempted mutation and must not proceed unless it returns {@code true};
  * checking {@link #isReady()} alone is never sufficient and is provided only for diagnostics.
+ *
+ * <p><b>Not currently used by {@code ErosionAttempt}.</b> Two different {@code ProtectionAdapter}
+ * implementations built against this class (review 54855/54861/54878/54890/54899/54901) were
+ * each independently found to claim a capability they could not actually verify. The root cause:
+ * {@link MutationRequest} is deliberately Minecraft-free (so this class stays pure-unit-testable,
+ * see {@code ErosionProtectionGateTest}), which cannot host a real per-attempt check that needs
+ * a live {@code ServerLevel}/{@code BlockPos} -- {@code ErosionAttempt} instead enforces
+ * {@code ClaimProtection} and {@code DynamicTerrainCaveInRisk} directly, as mandatory,
+ * unconditional steps. This class remains correct on its own terms and may host a genuinely
+ * Minecraft-free policy in the future; it is simply not the vehicle for those two checks.
  */
 public final class ErosionProtectionGate {
 

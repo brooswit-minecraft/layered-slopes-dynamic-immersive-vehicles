@@ -16,7 +16,8 @@ import net.minecraft.world.level.block.state.BlockState;
  * One per-wheel, per-tick erosion attempt at a single block position: dedup, the accepted
  * MINECRAFT-555 slip-to-probability roll, a shuffled-direction-first-accepted
  * {@code Smoothing.canSmooth}/{@code smooth} call (555 prep packet 54611 acceptance matrix cases
- * 6/7/10/13/14), and the {@link ErosionProtectionGate} check before any world mutation.
+ * 6/7/10/13/14), a real claim/protection check at both ends ({@link ClaimProtection}), and a real
+ * Dynamic-Terrain-cave-in-risk check ({@link DynamicTerrainCaveInRisk}) before any world mutation.
  *
  * <p>Taking {@link ServerLevel} rather than the generic {@code Level} makes a client-side call
  * impossible to even construct, not merely checked at runtime -- but it does NOT by itself rule
@@ -27,14 +28,20 @@ import net.minecraft.world.level.block.state.BlockState;
  * chunk is confirmed loaded before any {@code BlockState}/{@code Smoothing} query touches it, so
  * this never forces a chunk load (review 54878 finding 2).
  *
- * <p>Every {@link ErosionProtectionGate.MutationRequest} this builds has {@code
- * propagationScopeKnown=false}: no neighbor/cave-in consequence analysis is implemented anywhere
- * in this mod yet, so claiming a known (even if empty) scope would be exactly the "boolean
- * standing in for coverage" this ticket's reviews have repeatedly rejected (review 54878 finding
- * 1). This means every real {@code attempt()} call is denied by the gate's own fail-closed check
- * before ever reaching an adapter, until a real propagation-scope-deriving implementation exists
- * -- intentional, matching this mod's standing "no production adapter/propagation means all real
- * erosion stays denied" position.
+ * <p>Earlier attempts at protection in this area (review 54855/54861/54878/54890/54899/54901)
+ * each separately overclaimed a capability the code did not actually back. The current shape
+ * avoids that by making the real checks mandatory, unconditional steps performed directly here --
+ * never gated behind an optional, separately-installed adapter whose capabilities could claim
+ * more than it verifies -- and by never claiming anything beyond what {@link ClaimProtection} and
+ * {@link DynamicTerrainCaveInRisk} actually, verifiably check (both documented as best-effort /
+ * conservative, not universal, in their own class docs). {@link ErosionProtectionGate} (merged
+ * PR #3) is deliberately NOT part of this path: its {@code MutationRequest} is Minecraft-free by
+ * design (kept pure-unit-testable, confirmed against {@code ErosionProtectionGateTest}), which
+ * cannot host a real per-attempt world check that needs a live {@code ServerLevel}/{@code
+ * BlockPos} -- routing these checks through it would have meant either breaking that design goal
+ * or, as happened three times, having the adapter claim a capability it could not verify. The
+ * gate class itself remains valid for a future, actually-Minecraft-free policy; it is simply not
+ * the vehicle for these two checks.
  */
 public final class ErosionAttempt {
     private ErosionAttempt() {
@@ -54,8 +61,10 @@ public final class ErosionAttempt {
         ROLL_FAILED,
         /** every horizontal direction was either unloaded, blocked, or unanchored (case 6/7/10). */
         NO_VALID_DIRECTION,
-        /** a direction would have worked, but {@link ErosionProtectionGate#authorize} denied every candidate. */
-        DENIED_BY_PROTECTION,
+        /** {@link ClaimProtection#mayMutate} denied source or destination for every candidate direction. */
+        PROTECTED,
+        /** {@link DynamicTerrainCaveInRisk#isPresent} found a real risk for every candidate direction. */
+        NEIGHBOR_CAVE_IN_RISK,
         /** the world was actually mutated via {@code Smoothing.smooth}. */
         APPLIED
     }
@@ -66,42 +75,54 @@ public final class ErosionAttempt {
         boolean canSmooth(ServerLevel level, BlockPos pos, Direction direction);
     }
 
+    /** Matches {@link ClaimProtection#mayMutate}'s signature so a test can fake/count it. */
+    @FunctionalInterface
+    interface ClaimCheck {
+        boolean mayMutate(ServerLevel level, BlockPos pos);
+    }
+
+    /** Matches {@link DynamicTerrainCaveInRisk#isPresent}'s signature so a test can fake/count it. */
+    @FunctionalInterface
+    interface CaveInRiskCheck {
+        boolean isPresent(ServerLevel level, BlockPos source, BlockPos destination);
+    }
+
+    /** Bundles every real-world seam so {@code attempt}'s signature does not grow with each one. */
+    static final class Hooks {
+        final Predicate<BlockPos> destinationLoaded;
+        final SmoothFeasibilityCheck canSmooth;
+        final ClaimCheck claim;
+        final CaveInRiskCheck caveInRisk;
+
+        Hooks(Predicate<BlockPos> destinationLoaded, SmoothFeasibilityCheck canSmooth,
+              ClaimCheck claim, CaveInRiskCheck caveInRisk) {
+            this.destinationLoaded = destinationLoaded;
+            this.canSmooth = canSmooth;
+            this.claim = claim;
+            this.caveInRisk = caveInRisk;
+        }
+
+        static Hooks real(ServerLevel level) {
+            return new Hooks(level::hasChunkAt, Smoothing::canSmooth,
+                    ClaimProtection::mayMutate, DynamicTerrainCaveInRisk::isPresent);
+        }
+    }
+
     public static Outcome attempt(ServerLevel level, BlockPos pos, double slipSpeedMs, double wheelLoadKg,
-                                   RandomSource random, ErosionConfig config, ErosionDedup dedup,
-                                   ErosionProtectionGate gate) {
-        return attempt(level, pos, slipSpeedMs, wheelLoadKg, random, config, dedup, gate, false,
-                level::hasChunkAt, Smoothing::canSmooth);
+                                   RandomSource random, ErosionConfig config, ErosionDedup dedup) {
+        return attempt(level, pos, slipSpeedMs, wheelLoadKg, random, config, dedup, Hooks.real(level));
     }
 
     /**
-     * Test-only seam: lets {@code ErosionAttemptGameTests} exercise the direction-selection and
-     * {@code Smoothing.smooth} mechanics under a {@code propagationScopeKnown=true} request
-     * without weakening the real {@link #attempt(ServerLevel, BlockPos, double, double,
-     * RandomSource, ErosionConfig, ErosionDedup, ErosionProtectionGate)} overload above, which
-     * always passes {@code false} in production.
+     * Package-only instrumented seam: lets {@code ErosionAttemptGameTests} fake any of the
+     * real-world checks deterministically (a destination as unloaded, a position as
+     * claim-protected, a cave-in risk as present) without depending on real chunk-loading or
+     * event-listener behavior, which proved to differ between environments in earlier, reverted
+     * attempts at these regressions. Production always uses {@link Hooks#real} via the overload
+     * above; this one is never called from production code.
      */
     static Outcome attempt(ServerLevel level, BlockPos pos, double slipSpeedMs, double wheelLoadKg,
-                            RandomSource random, ErosionConfig config, ErosionDedup dedup,
-                            ErosionProtectionGate gate, boolean propagationScopeKnownForTest) {
-        return attempt(level, pos, slipSpeedMs, wheelLoadKg, random, config, dedup, gate,
-                propagationScopeKnownForTest, level::hasChunkAt, Smoothing::canSmooth);
-    }
-
-    /**
-     * Package-only instrumented seam (review 54884/54886/54888/54890): {@code
-     * destinationLoadedCheck} lets a test deterministically fake a specific destination as
-     * unloaded; {@code canSmoothCheck} lets a test prove {@code Smoothing.canSmooth} itself is
-     * never even queried for that candidate -- "no mutation happened" alone does not prove "no
-     * query happened" (a reordered implementation could query first and still skip the mutation
-     * afterward). Neither seam depends on real chunk-loading behavior, which proved to differ
-     * between environments in an earlier, reverted attempt at this same regression. Production
-     * always passes the real {@code level::hasChunkAt}/{@code Smoothing::canSmooth} via the two
-     * overloads above; this one is never called from production code.
-     */
-    static Outcome attempt(ServerLevel level, BlockPos pos, double slipSpeedMs, double wheelLoadKg,
-                            RandomSource random, ErosionConfig config, ErosionDedup dedup,
-                            ErosionProtectionGate gate, boolean propagationScopeKnownForTest,
-                            Predicate<BlockPos> destinationLoadedCheck, SmoothFeasibilityCheck canSmoothCheck) {
+                            RandomSource random, ErosionConfig config, ErosionDedup dedup, Hooks hooks) {
         if (!level.getServer().isSameThread()) {
             return Outcome.OFF_THREAD;
         }
@@ -125,30 +146,69 @@ public final class ErosionAttempt {
         }
 
         List<Direction> candidates = shuffledHorizontalDirections(random);
-        boolean deniedByProtection = false;
+        boolean anyProtected = false;
+        boolean anyCaveInRisk = false;
         for (Direction direction : candidates) {
             BlockPos destination = pos.relative(direction);
             // The anchor-support block Smoothing/SmoothRules checks is always destination's
             // vertical neighbour -- same chunk column as destination, since chunks span full
             // world height -- so confirming destination's chunk is loaded covers it too.
-            if (!destinationLoadedCheck.test(destination)) {
+            if (!hooks.destinationLoaded.test(destination)) {
                 continue;
             }
-            if (!canSmoothCheck.canSmooth(level, pos, direction)) {
+            if (!hooks.canSmooth.canSmooth(level, pos, direction)) {
                 continue;
             }
-            ErosionProtectionGate.MutationRequest request = new ErosionProtectionGate.MutationRequest(
-                    dimension, pos.getX(), pos.getY(), pos.getZ(),
-                    destination.getX(), destination.getY(), destination.getZ(), propagationScopeKnownForTest);
-            if (!gate.authorize(request)) {
-                deniedByProtection = true;
+            // Captured immediately before the claim checks below, which run real synchronous
+            // NeoForge listeners that can mutate the world as a side effect (review 54910): a
+            // listener could swap source/destination/support to a DIFFERENT configuration that
+            // is ALSO still smoothable, which a boolean-only canSmooth recheck cannot detect --
+            // Smoothing.smooth()'s own TOCTOU fix only protects its OWN authorization event, not
+            // ours, since it (re-)derives its plan strictly after these claim checks already ran.
+            BlockState sourceBeforeClaimChecks = level.getBlockState(pos);
+            BlockState destinationBeforeClaimChecks = level.getBlockState(destination);
+            if (!hooks.claim.mayMutate(level, pos) || !hooks.claim.mayMutate(level, destination)) {
+                anyProtected = true;
+                continue;
+            }
+            if (hooks.caveInRisk.isPresent(level, pos, destination)) {
+                anyCaveInRisk = true;
+                continue;
+            }
+            // Re-verify feasibility AND exact state (review 54907/54908/54910/54915): a
+            // claim-check listener could have mutated source, destination, or the (not
+            // independently visible to us) support block. canSmooth catches any change that
+            // flips the move's own feasibility verdict -- including a support-only change that
+            // breaks anchoring -- but NOT every support change: a support block swapped for a
+            // different, still-sturdy one leaves canSmooth true, and that IS harmless (grading's
+            // own fresh plan() re-derivation inside Smoothing.smooth() produces the identical
+            // result), so it correctly proceeds rather than being denied. The explicit
+            // source/destination state-equality checks below catch the real remaining gap: a
+            // listener swapping source or destination itself to a DIFFERENT configuration that
+            // is ALSO still smoothable, which canSmooth alone cannot distinguish from the
+            // original (review 54910's exact finding). Re-confirm loaded first, since a listener
+            // could also have unloaded either position (rare, but checked rather than assumed).
+            if (!hooks.destinationLoaded.test(destination) || !level.hasChunkAt(pos)) {
+                continue;
+            }
+            if (!hooks.canSmooth.canSmooth(level, pos, direction)) {
+                continue;
+            }
+            if (!level.getBlockState(pos).equals(sourceBeforeClaimChecks)
+                    || !level.getBlockState(destination).equals(destinationBeforeClaimChecks)) {
                 continue;
             }
             if (Smoothing.smooth(level, pos, direction, true)) {
                 return Outcome.APPLIED;
             }
         }
-        return deniedByProtection ? Outcome.DENIED_BY_PROTECTION : Outcome.NO_VALID_DIRECTION;
+        if (anyProtected) {
+            return Outcome.PROTECTED;
+        }
+        if (anyCaveInRisk) {
+            return Outcome.NEIGHBOR_CAVE_IN_RISK;
+        }
+        return Outcome.NO_VALID_DIRECTION;
     }
 
     private static List<Direction> shuffledHorizontalDirections(RandomSource random) {

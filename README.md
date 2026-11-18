@@ -24,8 +24,11 @@ This is a bounded, multi-slice implementation. Current slice:
       dependency, no RNG draw, no world mutation — pure functions and unit tests only.
 - [x] NeoForge mod scaffold: main mod class, `neoforge.mods.toml`, pinned (sha512-verified)
       download-and-verify dependencies on `layered-slopes` (v0.2.0) and `layered-slope-grading`
-      (v0.1.0). `StandaloneBootGameTests` confirms a real boot via `./gradlew runGameTestServer`
-      (0 mod requirements missing), wired into CI with `scripts/check_gametest_count.py`.
+      (v0.2.0 -- bumped from an initially-pinned v0.1.0 that predated `SmoothingAuthorizationEvent`
+      entirely, caught by review 54899/54901 via direct `unzip -l` inspection of the actual
+      release jar, not just its source tag). `StandaloneBootGameTests` confirms a real boot via
+      `./gradlew runGameTestServer` (0 mod requirements missing), wired into CI with
+      `scripts/check_gametest_count.py`.
 - [ ] DIV dependency and its contact-telemetry seam (per-wheel slip/load payload). Deferred: DIV
       ships no stable, sha512-pinnable GitHub Release at all (`gh release list` on that repo
       returns only private "not for publishing" draft test-builds), so it is not yet declared as
@@ -36,52 +39,132 @@ This is a bounded, multi-slice implementation. Current slice:
 - [x] layered-slope-grading-side generic safe-mutation/protection seam: `SmoothingAuthorizationEvent`,
       a cancellable NeoForge event fired before `Smoothing.smooth()` mutates the world, merged in
       [layered-slope-grading PR #2](https://github.com/brooswit-minecraft/layered-slope-grading/pull/2)
-      (released as part of that mod's next version). Does NOT by itself cover resulting
-      neighbor/cave-in propagation after an authorized move, and no existing third-party
-      claim/protection mod automatically gains coverage from it — both explicitly named gaps for
-      whichever erosion consumer slice needs that coverage to implement and test it.
-- [x] Protection/dedup policy primitives: `ErosionDedup` (at most one roll-and-mutation attempt
-      per dimension/block/tick, including a rejected attempt, with bounded per-tick lifecycle
-      storage) and `ErosionProtectionGate`, which separates READINESS (`isReady()`: is a capable
-      `ProtectionAdapter` installed) from the actual per-attempt decision (`authorize(request)`):
-      the gate itself fails closed on missing/unknown mandatory request context (null dimension,
-      unknown propagation scope) before ever consulting the adapter, and otherwise still requires
-      the adapter's own per-request grant -- `isReady()` alone is never permission to mutate.
-      Pure logic, no Minecraft/NeoForge dependency. No production adapter exists yet, so every
-      real `authorize()` call is denied by construction; full propagation/neighbor/cave-in
-      coverage remains unimplemented.
-- [x] `ErosionAttempt`: the real per-position orchestration -- dedup claim, the accepted
-      MINECRAFT-555 slip-to-probability roll, a shuffled-direction-first-`canSmooth`-accepted
-      call into `Smoothing.smooth()`, and the `ErosionProtectionGate` check before any world
-      mutation. Takes a `ServerLevel` (a client-side call cannot even be constructed) and asserts
-      `level.getServer().isSameThread()` before touching anything -- the type alone does not rule
-      out an off-thread call. Derives dimension/tick from the level/its server, never from a
-      caller-supplied value; every candidate position's chunk is confirmed loaded before any
-      block query, never force-loading one. Every real request this builds has
-      `propagationScopeKnown=false` -- no neighbor/cave-in consequence analysis exists yet, so
-      every real call is denied by construction regardless of whether a production adapter
-      exists (see above). Takes slip/load telemetry as plain parameters; makes no assumption
-      about where it comes from, since DIV's own per-wheel contact-telemetry seam is not wired in
-      yet (see below). `ErosionAttemptGameTests` (10 cases: default-closed denial, a granting
-      adapter still denied because propagation scope is never claimed known, a known-scope
-      granting adapter actually applying a move with material conservation verified, per-tick
-      dedup, a denied attempt and a failed roll each still consuming the dedup slot,
-      no-valid-direction, an off-thread call denied (bounded join with safe worker
-      interrupt/cleanup on timeout) before touching anything, an unloaded source denied without
-      force-loading it, and a deterministic instrumented-seam test proving `Smoothing.canSmooth`
-      itself is never even queried for an unloaded destination -- not just "no mutation
-      happened," which a reordered implementation (query first, skip mutation after) could still
-      satisfy -- using injectable destination-loaded/feasibility-check seams rather than real
-      chunk state, after an earlier real-chunk version of that case passed locally but proved
-      environment-dependent on the real GitHub Actions runner. The seam's own sensitivity was
-      verified by temporarily reordering the production check, confirming the test fails, then
-      reverting) prove it against a real world, not primitives in isolation.
+      (released starting with that mod's v0.2.0, which this mod is pinned to). Not consumed by
+      this mod's own protection design below -- see why there.
+- [x] `ErosionDedup`: at most one roll-and-mutation attempt per dimension/block/tick, including a
+      rejected attempt, with bounded per-tick lifecycle storage. Pure logic, no Minecraft/NeoForge
+      dependency.
+- [x] Real, unconditional, directly-enforced protection -- not an optional adapter. Three earlier
+      attempts in this area (`ErosionProtectionGate`/`ProtectionAdapter`, reviewed in PR #3, and
+      two different adapters built against it) were each separately found to claim a capability
+      the code did not actually verify (review 54855/54861/54878/54890/54899/54901) -- including
+      the realization that `ErosionProtectionGate.MutationRequest` is deliberately Minecraft-free
+      (kept pure-unit-testable), which cannot host a real per-attempt check that needs a live
+      `ServerLevel`/`BlockPos`. The current design instead makes two real checks mandatory,
+      unconditional steps inside `ErosionAttempt` itself:
+      - `ClaimProtection`: the same real, already-accepted pattern
+        [`layered-slopes-flowing-fluids`' `Protection.mayErode`](https://github.com/brooswit-minecraft/layered-slopes-flowing-fluids/blob/main/src/main/java/io/github/brooswitminecraft/layeredslopesflowingfluids/Protection.java)
+        uses: post a real `BlockEvent.BreakEvent` through a fake player and honor cancellation,
+        applied at both source and destination -- plus the server's own applicable built-in
+        constraints a `BreakEvent` check alone does not establish: the world border
+        (`ServerLevel#getWorldBorder()`) and spawn protection
+        (`MinecraftServer#isUnderSpawnProtection`). Best-effort for third-party claim mods (covers
+        ones that listen on `BreakEvent`), not a guarantee against every possible hook; a preflight
+        check only, and explicitly not a claim of placement-hook-equivalent semantics at the
+        destination.
+      - `DynamicTerrainCaveInRisk`: Dynamic Terrain's cave-ins are the one concretely-named
+        external propagation risk reviews identified. Two earlier, narrower designs were each
+        found to overclaim: a face-adjacent-neighbor tag scan (review 54907/54908 -- rested on
+        today's shipped tag contents and call ordering, and treated an unloaded neighbor as
+        proven-safe rather than unknown), then an unconditional "deny whenever Dynamic Terrain is
+        loaded at all" rule (review 54910 -- more conservative than necessary, since "DT is
+        loaded" and "DT's cave-ins are actually active" are different, independently-verifiable
+        facts). Verified directly against DT's own source (review 54915): its cave-in handler
+        returns immediately, doing nothing, whenever its own `caveInsEnabled` config value
+        (`ModConfig.Type.SERVER`, default `false`) is `false`. This now reads that real, live
+        config value through NeoForge's own public, generic, supported API
+        (`ModConfigs.getModConfigs(modId)` plus the standard `night-config` reader) -- never DT's
+        Java classes, never DT's own `ModConfigSpec.BooleanValue` field, the same
+        data/API-only optional-dependency shape `GroundSurfaces.java` already uses for Layered
+        Slopes. Any absence, read failure, or unexpected value type fails closed (treated as
+        enabled/risky), per review 54915's "unknown/unreadable/version-mismatched config remains
+        denied." If Dynamic Terrain is not loaded at all, there is no such risk to check.
+
+        Review 54916/54917/54919/54920 found that alone insufficient: a generically-matched key
+        proves nothing about whether a DIFFERENT, unverified Dynamic Terrain release still wires
+        that key to the same early-return guard. So the permissive branch (treating a read
+        `false` as genuinely safe) is reached only when Dynamic Terrain's own loaded version
+        falls inside a directly-verified range (checked tag-by-tag against every
+        brooswit-minecraft/legacy-dynamic-terrain release from v0.28.2 through its current
+        latest, v5.0.1 -- identical key/default/type/guard the whole way); any other installed
+        version fails closed, and the config read itself requires exactly one matching
+        registered config (ambiguity -- more than one -- also fails closed, rather than guessing
+        the first match). `DynamicTerrainCaveInRiskVersionTest` unit-tests the version boundary
+        directly (lower/upper bound, below, above -- no Dynamic Terrain or mod environment
+        needed, since it is a pure function over `org.apache.maven.artifact.versioning` types).
+        An opt-in `./gradlew runGameTestServer -PdtPairedRuntime=true` build (wired into CI via
+        `.github/workflows/dt-paired-runtime.yml`, never part of the default build/test) proves
+        the real production path against an actual pinned Dynamic Terrain v5.0.1, booting twice
+        with its own real config file on disk set to `false` then `true` and requiring the
+        correct `ErosionAttempt.Outcome` each time. Review 54925 correctly found that alone still
+        insufficient: neither the test nor the workflow had ever observed Dynamic Terrain's own
+        loaded `DynamicTerrainConfig.CAVE_INS_ENABLED` value directly, so a divergence between
+        this mod's generic reader and Dynamic Terrain's real value could pass unnoticed.
+        `DynamicTerrainPairedGameTests` (compiled only in this opt-in profile, the one place
+        referencing Dynamic Terrain's own Java classes directly is deliberate and safe) now reads
+        that `BooleanValue` directly and cross-checks it against the generic reader before
+        checking the production outcome. It also edits Dynamic Terrain's own config file on disk
+        WHILE the false-boot server keeps running (no restart) and polls for the live value to
+        flip -- an evidence-gathering probe, not an assumption either way: confirmed, on a real
+        pinned Dynamic Terrain v5.0.1, that NeoForge's own config file watcher DOES pick up the
+        change and flip the value within a couple of seconds, and that the production path
+        transitions from `APPLIED` to `NEIGHBOR_CAVE_IN_RISK` accordingly, with this mod's generic
+        reader agreeing throughout. Had no reload been observed, the test would fail loudly
+        rather than silently pass, per review 54923's "fail closed for runtime changes" --
+        reload is confirmed to work, not merely hoped to.
+
+        **Narrowed, not eliminated, limitation:** a world running Dynamic Terrain with
+        `caveInsEnabled=true` (not the default) still gets no usable erosion -- building a finite
+        supported policy for that configuration would require replicating DT's own recursive
+        `SupportSearch`-based connectivity check (`CaveIns.java`/`SupportSearch.java`, bounded to
+        256 visited cells and re-checking the changed position plus all six face-adjacent
+        neighbors) to prove a specific move cannot destabilize a reachable DT-tagged block -- a
+        substantial, independent reimplementation not attempted in this slice. Flagged explicitly
+        as the remaining open product question, not claimed as resolved.
+      `ErosionAttempt`'s production path is: dedup claim, the accepted MINECRAFT-555
+      slip-to-probability roll, a shuffled-direction-first-`canSmooth`-accepted candidate, both
+      real checks above at that candidate's source and destination, then a re-verification before
+      applying: a synchronous `ClaimProtection` listener runs real NeoForge event handlers that
+      could mutate the world as a side effect, and a boolean-only `canSmooth` recheck cannot tell
+      the original configuration apart from a DIFFERENT one a listener swapped in that happens to
+      still be smoothable (review 54910) -- so this re-verifies `canSmooth` AND compares the exact
+      source/destination `BlockState`s captured just before the claim checks, failing closed on
+      any difference. `Smoothing.smooth()` itself also re-derives and compares its own plan before
+      applying (grading's existing TOCTOU fix), covering its own authorization event; this is
+      additional, earlier defense in depth, not a replacement for it. Takes a `ServerLevel` (a
+      client-side call cannot even be constructed) and asserts `level.getServer().isSameThread()`
+      before touching anything -- the type alone does not rule out an off-thread call. Derives
+      dimension/tick from the level/its server, never from a caller-supplied value; every
+      candidate position's chunk is confirmed loaded before any block query, never force-loading
+      one. Takes slip/load telemetry as plain parameters; makes no assumption about where it comes
+      from, since DIV's own per-wheel contact-telemetry seam is not wired in yet (see below).
+      `ErosionAttemptGameTests` (17 cases) prove this against a real world: a real move applying
+      and conserving material with no claim mod/Dynamic Terrain installed (the
+      "missing/unsupported integration" success case), a protected source, a protected
+      destination, and a detected cave-in risk each denying (via injected orchestration-seam
+      fakes), a REAL `BlockEvent.BreakEvent` listener cancelling at source and at destination
+      each denying via the actual production path, a direct check that the real
+      `DynamicTerrainCaveInRisk` reports no risk when Dynamic Terrain is genuinely absent, a REAL
+      `BlockEvent.BreakEvent` listener that swaps the source to a DIFFERENT but still-smoothable
+      state without cancelling (proving the exact-state recheck catches what a boolean-only
+      recheck cannot), a REAL listener that swaps the support block for a different-but-sturdy
+      one proving that harmless case still applies rather than being overcorrected into a denial
+      (review 54915), a direct check that an unknown config lookup fails closed to the caller's
+      fallback, per-tick dedup, a denied attempt and a failed roll each still consuming
+      the dedup slot, no-valid-direction, an off-thread call denied (bounded join with safe
+      worker interrupt/cleanup on timeout) before touching anything, an unloaded source denied
+      without force-loading it, and a deterministic instrumented-seam test proving
+      `Smoothing.canSmooth` itself is never even queried for an unloaded destination -- not just
+      "no mutation happened," which a reordered implementation could still satisfy; verified by
+      temporarily reordering the production check, confirming the test fails, then reverting.
+- [x] `ErosionProtectionGate`/`ProtectionAdapter` (merged PR #3) remains in the codebase, valid on
+      its own terms, but is no longer part of `ErosionAttempt`'s real path for the reason above --
+      its Minecraft-free abstraction cannot host a real world-aware check.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), a concrete propagation/claim-aware `ProtectionAdapter` (its real scope is defined by
-      whatever neighbor-support consequence the DIV-side wiring actually produces -- not designed
-      in the abstract ahead of that), multiplayer sync, dependency-failure tests, pinned-jar smoke
-      acceptance, and gameplay acceptance evidence.
+      above), an explicit default-OFF config switch before any real erosion can apply,
+      multiplayer sync, dependency-failure tests, pinned-jar smoke acceptance, and gameplay
+      acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 will default to OFF; operators running this mod alongside Dynamic Terrain's deprecated vehicle
@@ -102,7 +185,10 @@ they are plain JUnit 5 tests with no Minecraft/NeoForge dependency.
 ```
 
 Boots a real dedicated server with this mod, `layered-slopes`, and `layered-slope-grading`
-installed and runs the 11 GameTests (boot-only, plus `ErosionAttemptGameTests`' 10 real-world
+installed and runs the 18 GameTests (boot-only, plus `ErosionAttemptGameTests`' 17 real-world
 orchestration cases). Wired into CI via `scripts/check_gametest_count.py`, which fails closed if
 the expected test count regresses. An opt-in `div-paired-runtime.yml` workflow additionally
-builds DIV fresh and boots everything together at DIV's real NeoForge floor.
+builds DIV fresh and boots everything together at DIV's real NeoForge floor. A second opt-in
+`dt-paired-runtime.yml` workflow boots this mod with a real, pinned Dynamic Terrain installed
+(never a default dependency) to prove `DynamicTerrainCaveInRisk`'s real behavior end to end --
+see the Status section above.

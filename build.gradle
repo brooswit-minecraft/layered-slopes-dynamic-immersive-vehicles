@@ -172,6 +172,40 @@ if (pairedRuntime) {
     }
 }
 
+// Opt-in Dynamic-Terrain-paired-runtime check (review 54916/54917/54919/54920): proves
+// DynamicTerrainCaveInRisk's real behavior against an actual pinned legacy-dynamic-terrain
+// release, with its own real caveInsEnabled config toggled on disk, never as part of the
+// default build/test -- this mod has, and must keep, no dependency on Dynamic Terrain.
+// Downloads and sha512-verifies the pinned jar, the same pattern layered-slopes/
+// layered-slope-grading already use, since (unlike DIV) Dynamic Terrain has real, stable,
+// sha512-pinnable GitHub Releases.
+def dtPairedRuntime = findProperty("dtPairedRuntime") == "true"
+def pinnedDynamicTerrainVersion = "5.0.1"
+def pinnedDynamicTerrainSha512 = "c2f85fef911a3f98fc609d8e0a91a54b1fc1fc6769d292e9208a5ed22f8443fbe5a898ce3a3baf6d4746f7ab33e8659bc7d89ff2de1808da8284c5f3de967caf"
+def dynamicTerrainJar = layout.buildDirectory.file("dynamicterrain/dynamicterrain-${pinnedDynamicTerrainVersion}.jar")
+if (dtPairedRuntime) {
+    // Only added to the compiled sourceSet under this opt-in flag: DynamicTerrainPairedGameTests
+    // does not exist in the default build/test at all, so it cannot affect
+    // scripts/check_gametest_count.py's fixed 18-test expectation for the ordinary run.
+    sourceSets.main.java.srcDir('src/dtPaired/java')
+
+    tasks.register("downloadDynamicTerrain") {
+        outputs.file(dynamicTerrainJar)
+        doLast {
+            def target = dynamicTerrainJar.get().asFile
+            target.parentFile.mkdirs()
+            def url = "https://github.com/brooswit-minecraft/legacy-dynamic-terrain/releases/download/v${pinnedDynamicTerrainVersion}/dynamicterrain-${pinnedDynamicTerrainVersion}.jar"
+            new URL(url).withInputStream { input -> target.withOutputStream { it << input } }
+            def digest = java.security.MessageDigest.getInstance("SHA-512")
+            def actual = digest.digest(target.bytes).encodeHex().toString()
+            if (actual != pinnedDynamicTerrainSha512) {
+                target.delete()
+                throw new GradleException("legacy-dynamic-terrain ${pinnedDynamicTerrainVersion} sha512 mismatch: ${actual}")
+            }
+        }
+    }
+}
+
 base {
     archivesName = mod_id
 }
@@ -202,6 +236,13 @@ neoForge {
         gameTestServer {
             type = "gameTestServer"
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            if (dtPairedRuntime) {
+                // Tells DynamicTerrainPairedGameTests which of Dynamic Terrain's own real
+                // caveInsEnabled states THIS boot's pre-written config file set, so it knows
+                // which production outcome to require -- never read by production code itself,
+                // which always re-derives the real value fresh from the loaded config.
+                systemProperty 'dt.caveInsEnabled', (findProperty('dtCaveInsEnabled') ?: 'false') as String
+            }
         }
 
         data {
@@ -238,10 +279,21 @@ dependencies {
         runtimeOnly('dev.ryanhcode.sable-companion:sable-companion-common-1.21.1:1.6.0') { transitive = false }
         runtimeOnly('curse.maven:minecraft-transport-simulator-286703:7926606') { transitive = false }
     }
+    if (dtPairedRuntime) {
+        compileOnly files(dynamicTerrainJar).builtBy(tasks.named("downloadDynamicTerrain"))
+        runtimeOnly files(dynamicTerrainJar).builtBy(tasks.named("downloadDynamicTerrain"))
+    }
 
     testImplementation platform('org.junit:junit-bom:5.11.3')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    // Same org.apache.maven.artifact.versioning classes neoforge.mods.toml dependency ranges use
+    // under the hood, and the exact version already on the real game runtime classpath
+    // (transitively, via the NeoForge moddev plugin) -- pinned explicitly here only so
+    // DynamicTerrainCaveInRiskVersionTest's pure version-boundary check can run under plain
+    // `./gradlew test`, which has no NeoForge/FML classpath of its own.
+    testImplementation 'org.apache.maven:maven-artifact:3.8.5'
 }
 
 test {
