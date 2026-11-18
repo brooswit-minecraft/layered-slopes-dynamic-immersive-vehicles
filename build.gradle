@@ -209,6 +209,24 @@ if (pairedRuntime) {
         }
     }
 
+    def pairedRuntimeWantedCoordinates = [
+            'curse.maven:minecraft-transport-simulator-286703',
+            'dev.ryanhcode.sable:sable-neoforge-1.21.1',
+            'dev.ryanhcode.sable-companion:sable-companion-common-1.21.1',
+    ] as Set
+
+    // Matches a resolved artifact's group:name against the wanted-coordinate set. MUST build
+    // the key with an explicit .toString(): "${id.group}:${id.name}" is a Groovy GString, and
+    // Set.contains(gstring) silently returns false even when the string CONTENT is identical to
+    // a member, because GString's hashCode() does not equal the equivalent String's hashCode()
+    // -- HashSet.contains looks in the wrong bucket and never finds it. This was a real,
+    // previously undiagnosed bug: pairedRuntimeManifest below had been silently matching ZERO
+    // artifacts in every real CI run, always falling through to its caller's
+    // "(no paired-runtime dependencies resolved)" fallback, confirmed by direct inspection of
+    // past div-paired-runtime.yml run logs -- not caught earlier because that fallback made the
+    // step still look successful.
+    def pairedRuntimeArtifactKey = { art -> "${art.moduleVersion.id.group}:${art.moduleVersion.id.name}".toString() }
+
     // An exact, verifiable manifest of what paired-runtime actually resolved -- review 54855:
     // the CI workflow previously globbed every "*sable*"/"*minecraft-transport-simulator*" jar
     // out of the whole shared Gradle module cache, which could pick up an unrelated same-named
@@ -217,22 +235,34 @@ if (pairedRuntime) {
     // coordinates this build.gradle itself declared above, nothing else.
     tasks.register("pairedRuntimeManifest") {
         doLast {
-            def wanted = [
-                    'curse.maven:minecraft-transport-simulator-286703',
-                    'dev.ryanhcode.sable:sable-neoforge-1.21.1',
-                    'dev.ryanhcode.sable-companion:sable-companion-common-1.21.1',
-            ] as Set
             def digest = java.security.MessageDigest.getInstance("SHA-256")
             configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts.each { art ->
-                def id = art.moduleVersion.id
-                def key = "${id.group}:${id.name}"
-                if (wanted.contains(key)) {
+                def key = pairedRuntimeArtifactKey(art)
+                if (pairedRuntimeWantedCoordinates.contains(key)) {
                     digest.reset()
                     def hash = digest.digest(art.file.bytes).encodeHex().toString()
-                    println "${key}:${id.version} file=${art.file.name} sha256=${hash}"
+                    println "${key}:${art.moduleVersion.id.version} file=${art.file.name} sha256=${hash}"
                 }
             }
         }
+    }
+
+    // Copies exactly those same three resolved jars (DIV's own real required runtime
+    // dependencies) into a plain directory, for the DIV-alone-isolation smoke job (direction,
+    // comment 55032) to drop straight into a real server's mods/ folder -- the same
+    // artifact-identification discipline as pairedRuntimeManifest above, reused rather than
+    // duplicated, never a glob over the shared Gradle cache.
+    tasks.register("copyPairedRuntimeJars", Copy) {
+        // MUST call from(...) here, in the task's own configuration body, not inside doFirst:
+        // AbstractCopyTask snapshots its source specs before execution to decide NO-SOURCE/
+        // up-to-date, so a from() added inside doFirst is too late and the task silently no-ops
+        // with NO-SOURCE even though the resolved-artifact list below is genuinely non-empty.
+        // This block only runs when the task is actually realized (requested on the CLI with
+        // -PpairedRuntime=true), so resolving runtimeClasspath here is safe.
+        from(configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts
+                .findAll { art -> pairedRuntimeWantedCoordinates.contains(pairedRuntimeArtifactKey(art)) }
+                .collect { it.file })
+        into layout.buildDirectory.dir("pairedRuntimeJars")
     }
 }
 
