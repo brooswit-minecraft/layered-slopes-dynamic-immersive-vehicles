@@ -1,0 +1,338 @@
+name: Client-sync acceptance, rejected/canceled unchanged case (opt-in)
+
+# Opt-in, CI-only, isolated runner (never Servy, never a shared/native-test-slot resource).
+# Direction (comment 55058/55111/55114/55137): completes the LIVE post-join update evidence
+# pair alongside client-sync-acceptance-enabled.yml -- this time proving that a REAL,
+# SPECIFIC denial (not merely the absence of a mutation, and never NO_CHANCE/a dropped command/
+# a pre-attempt timeout/a disconnected client standing in for it) leaves both the source and
+# destination genuinely unchanged from an already-connected client's own perspective, observed
+# for a bounded window AFTER the server has acknowledged the real denial.
+#
+# Uses a REAL vanilla protection mechanism, not a mock: the world border. A first real attempt
+# tried spawn protection instead, but NeoForge's FakePlayer (which ClaimProtection's break-event
+# preflight uses) evidently bypasses it (outcome=APPLIED, not PROTECTED). ClaimProtection's own
+# FIRST, unconditional check -- !level.getWorldBorder().isWithinBounds(pos) -- involves no
+# FakePlayer at all: /worldborder shrinks the real border so its own max X falls exactly between
+# the source and destination X coordinates, matching WorldBorder#isWithinBounds's own real
+# strict-upper-bound semantics (x >= min && x < max), verified with checked arithmetic below
+# rather than assumed. The attempt uses the EXACT same guaranteed-chance config/slip/load as the
+# enabled case (client-sync-acceptance-enabled.yml), so the only reason the attempt can be
+# denied is this real border check, never chance or direction -- requiring the server to report
+# the specific outcome=PROTECTED, not any other denial outcome.
+#
+# Review finding (55137): a plain fixed-tick timer started at baseline capture does not
+# structurally prove the observation continued AFTER the real denial was acknowledged -- a
+# delayed harness could in principle let the client's timer expire before the attempt even ran,
+# and still pass for the wrong reason. ErosionClientSyncLiveProbe now accepts an optional
+# acknowledge-file property: this workflow writes it only AFTER independently confirming the
+# real outcome=PROTECTED line in the server's own log, and the client requires that file to
+# appear before starting its own further-bounded post-acknowledgment watch window, reporting the
+# distinct TIMEOUT_NO_ACK status (never silently folded into UNCHANGED) if that file never
+# appears at all within the overall bound.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/client-sync-acceptance-rejected.yml'
+      - 'build.gradle'
+      - 'gradle.properties'
+      - 'settings.gradle'
+      - 'gradle/wrapper/**'
+      - 'src/**'
+
+permissions:
+  contents: read
+
+jobs:
+  rejected-unchanged-client-sync-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: server-side
+      - uses: actions/checkout@v4
+        with:
+          path: client-side
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Install Xvfb, a software GL renderer (Mesa llvmpipe), and screenshot/input tooling for the headless client
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y xvfb mesa-utils libgl1-mesa-dri x11-apps imagemagick xdotool
+
+      - name: Pre-seed the server's offline-mode server.properties (spawn-protection deliberately disabled -- the real world border is this slice's denial mechanism) and a test-only enabled-erosion config before first boot
+        run: |
+          mkdir -p server-side/run/config client-side/run
+          echo "eula=true" > server-side/run/eula.txt
+          cat > server-side/run/server.properties <<'EOF'
+          online-mode=false
+          server-port=25579
+          level-seed=512
+          spawn-protection=0
+          EOF
+          # Exact values ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG uses -- the ONLY
+          # reason this slice's forced attempt can be denied must be the real world-border check
+          # below, never chance or direction.
+          cat > server-side/run/config/layeredslopesdynamicimmersivevehicles-server.toml <<'EOF'
+          erosionEnabled = true
+          slipThresholdMs = 0.15
+          baseErosionPerTick = 1000.0
+          referenceSlipMs = 10.0
+          referenceLoadKg = 300.0
+          maxSlipFactor = 3.0
+          minLoadFactor = 0.25
+          maxLoadFactor = 4.0
+          EOF
+
+      - name: Boot a real server, shrink the real world border to exclude the destination, wait for join, watch the client's baseline, trigger the real-denial attempt, verify both endpoints stayed unchanged, then stop both gracefully
+        run: |
+          set -o pipefail
+          cd server-side
+          mkfifo stdin.pipe
+          exec 9<>stdin.pipe
+          timeout 900 ./gradlew runServer --no-daemon -PerosionClientSyncTest=true \
+            < stdin.pipe > server-boot.log 2>&1 &
+          server_pid=$!
+          cd ..
+
+          for i in $(seq 1 120); do
+            grep -q 'Done (' server-side/server-boot.log 2>/dev/null && break
+            sleep 2
+          done
+          if ! grep -q 'Done (' server-side/server-boot.log; then
+            echo "::error::server never reported 'Done (' -- see server-boot.log"
+            cat server-side/server-boot.log
+            exit 1
+          fi
+
+          # The first real attempt at this slice tried real spawn-protection, but the fake
+          # player ClaimProtection uses for its break-event preflight evidently bypasses it
+          # (outcome=APPLIED, not PROTECTED) -- NeoForge's FakePlayer is apparently exempt.
+          # ClaimProtection#mayMutate's own FIRST check, the real world border
+          # (!level.getWorldBorder().isWithinBounds(pos)), involves no FakePlayer at all and is
+          # unconditional.
+          #
+          # Review finding (exact head 410946146): the prior version of this check used
+          # source_x<=max / dest_x>max and described x=90 as "inside" a border with max=90 --
+          # but the real net.minecraft.world.level.border.WorldBorder#isWithinBounds(double,
+          # double,double) is `x >= getMinX() && x < getMaxX()`, a STRICT upper bound. At x=90
+          # with max=90, 90 < 90 is false, so x=90 is already OUTSIDE -- the prior test
+          # accidentally put BOTH the source and destination outside the border instead of
+          # isolating only the destination. Fixed by shifting both positions down by one: source
+          # at x=89 is genuinely inside (89 < 90), destination at x=90 is genuinely outside (90
+          # is NOT < 90) -- matching the real API's own inequality, not an assumed one.
+          border_center_x=0
+          border_size=180
+          source_x=89
+          dest_x=90
+          border_max_x=$((border_center_x + border_size / 2))
+          # Verify the actual inequalities with real arithmetic against the values this script
+          # is about to apply, matching WorldBorder#isWithinBounds's real strict-upper-bound
+          # semantics (x >= min && x < max): the source must be strictly LESS than the real
+          # border's max X (inside) and the destination must be greater than or equal to it
+          # (outside).
+          if [ "$source_x" -ge "$border_max_x" ]; then
+            echo "::error::source_x=$source_x is NOT < border_max_x=$border_max_x -- WorldBorder#isWithinBounds requires x < max (a strict upper bound), so the source would also be outside the border, invalidating this test's isolation of the destination"
+            kill -9 "$server_pid" 2>/dev/null || true
+            exit 1
+          fi
+          if [ "$dest_x" -lt "$border_max_x" ]; then
+            echo "::error::dest_x=$dest_x is NOT >= border_max_x=$border_max_x -- WorldBorder#isWithinBounds requires x < max, so the destination would still be inside the border and no denial would occur"
+            kill -9 "$server_pid" 2>/dev/null || true
+            exit 1
+          fi
+          echo "verified against WorldBorder#isWithinBounds's real strict-upper-bound semantics (x >= min && x < max): border_max_x=$border_max_x, source_x=$source_x (inside), dest_x=$dest_x (outside)"
+
+          # A first real CI run of this exact fix reported outcome=APPLIED, not PROTECTED -- the
+          # server log showed "Set the center of the world border to 0.50, 0.50", not 0.00, 0.00,
+          # even though "0 0" was sent. Root cause, verified against the real vanilla command
+          # parser: /worldborder center's argument type is Vec2Argument.vec2(), constructed with
+          # centerCorrect=true, and WorldCoordinate#parseDouble adds +0.5 to any bare integer
+          # coordinate with no decimal point when centerCorrect is true. With the real center at
+          # (0.5, 0.5) and size 180, the real max X was 90.5, not the 90.0 this script assumed --
+          # x=90 (90 < 90.5) was still genuinely INSIDE, so the destination mutation was allowed.
+          # Fixed by passing explicit decimals ("0.0"), which WorldCoordinate#parseDouble takes
+          # literally (its centering only applies when the string contains no "."), so the real
+          # in-game center now matches this script's own arithmetic exactly.
+          printf 'worldborder center %s.0 0.0\n' "$border_center_x" > server-side/stdin.pipe
+          sleep 1
+          printf 'worldborder set %s\n' "$border_size" > server-side/stdin.pipe
+          sleep 2
+          printf 'forceload add 80 -10 100 10\n' > server-side/stdin.pipe
+          sleep 2
+          for attempt in 1 2 3 4 5; do
+            {
+              printf 'setblock 89 -59 0 minecraft:dirt\n'
+              printf 'setblock 90 -59 0 minecraft:air\n'
+              printf 'setblock 90 -60 0 minecraft:stone\n'
+              printf 'setblock 88 -59 0 minecraft:stone\n'
+              printf 'setblock 89 -59 1 minecraft:stone\n'
+              printf 'setblock 89 -59 -1 minecraft:stone\n'
+            } > server-side/stdin.pipe
+            sleep 3
+            grep -qF 'Changed the block at 89, -59, 0' server-side/server-boot.log 2>/dev/null && break
+            echo "diagnostic: setup attempt $attempt did not land yet, retrying"
+          done
+          if ! grep -qF 'Changed the block at 89, -59, 0' server-side/server-boot.log; then
+            echo "::error::world setup never reached the server after 5 attempts -- see server-boot.log tail:"
+            tail -20 server-side/server-boot.log
+            kill -9 "$server_pid" 2>/dev/null || true
+            exit 1
+          fi
+
+          Xvfb :99 -screen 0 1280x720x24 &
+          xvfb_pid=$!
+          sleep 2
+          export DISPLAY=:99
+
+          cd client-side
+          timeout 600 ./gradlew runClient --no-daemon \
+              -PerosionClientSyncLiveProbe=true \
+              -PerosionClientSyncQuickPlay=localhost:25579 \
+              -PerosionClientSyncLiveProbeSourcePos=89,-59,0 \
+              -PerosionClientSyncLiveProbeDestPos=90,-59,0 \
+              -PerosionClientSyncLiveProbeReadySignalFile="$(pwd)/client-ready-signal.txt" \
+              -PerosionClientSyncLiveProbeAcknowledgeFile="$(pwd)/attempt-acknowledged.txt" \
+              -PerosionClientSyncLiveProbeOutputFile="$(pwd)/client-live-probe-result.txt" \
+            > client-boot.log 2>&1 &
+          client_pid=$!
+          cd ..
+
+          for i in $(seq 1 30); do
+            grep -qF 'Loaded 0 entity animations' client-side/client-boot.log 2>/dev/null && break
+            sleep 2
+          done
+          for attempt in 1 2 3 4 5 6; do
+            DISPLAY=:99 xdotool mousemove 638 567 2>>client-side/xdotool.log || true
+            sleep 1
+            DISPLAY=:99 xdotool mousedown 1 2>>client-side/xdotool.log || true
+            sleep 1
+            DISPLAY=:99 xdotool mouseup 1 2>>client-side/xdotool.log || true
+            grep -qE 'joined the game' server-side/server-boot.log 2>/dev/null && break
+            sleep 7
+          done
+          if ! grep -qE 'joined the game' server-side/server-boot.log; then
+            echo "::error::no player ever joined the server -- the headless client did not connect. client-boot.log:"
+            cat client-side/client-boot.log || true
+            kill -9 "$server_pid" "$client_pid" "$xvfb_pid" 2>/dev/null || true
+            exit 1
+          fi
+          # Move the connected player near the test area (well inside the border, away from its
+          # edge) so the client genuinely tracks the chunk containing both positions.
+          printf 'tp @a 85 -58 0\n' > server-side/stdin.pipe
+          sleep 3
+
+          # The client must signal it has genuinely captured a baseline from its own ClientLevel
+          # BEFORE the attempt is triggered -- same discipline as the enabled case -- and the
+          # attempt must be fired promptly after that signal so the probe's own bounded watch
+          # window (started at baseline capture) still has time left to observe the real denial
+          # acknowledgment, not merely time out before the attempt even runs.
+          ready=false
+          for i in $(seq 1 60); do
+            if [ -f client-side/client-ready-signal.txt ]; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != "true" ]; then
+            echo "::error::the client never signaled that it captured its baseline -- it may never have tracked the target chunk. client-boot.log:"
+            cat client-side/client-boot.log || true
+            kill -9 "$server_pid" "$client_pid" "$xvfb_pid" 2>/dev/null || true
+            exit 1
+          fi
+
+          printf 'erosionclientsynctest 89 -59 0 5.0 300.0\n' > server-side/stdin.pipe
+          sleep 3
+          # Require the exact, specific real denial -- never a different outcome standing in for
+          # it (NO_CHANCE, NO_VALID_DIRECTION, etc. would all also leave the world unchanged, but
+          # none of them would be genuine protection-cancellation evidence).
+          if ! grep -qF 'erosionclientsynctest outcome=PROTECTED' server-side/server-boot.log; then
+            echo "::error::expected 'erosionclientsynctest outcome=PROTECTED' in the server log -- the forced attempt did not report the expected real denial. server-boot.log tail:"
+            tail -20 server-side/server-boot.log
+            kill -9 "$server_pid" "$client_pid" "$xvfb_pid" 2>/dev/null || true
+            exit 1
+          fi
+          # Review finding (55137): a plain fixed-tick timer started at baseline capture does
+          # not structurally prove continued observation happened AFTER this real denial was
+          # acknowledged -- a delayed harness could in principle let the client's timer expire
+          # before this very line ran. Only write the acknowledge file the connected client
+          # consumes AFTER independently confirming the real outcome=PROTECTED line above, so
+          # there is a genuine, checked causal order: server log confirmed here -> file written
+          # -> client detects it -> client's own bounded POST_ACKNOWLEDGE_WATCH_TICKS begins.
+          printf 'ack' > client-side/attempt-acknowledged.txt
+
+          # Wait for the client's own bounded watch window to finish naturally (it must still be
+          # connected and actively watching for this file to ever appear) -- this is real,
+          # continued, post-acknowledgment observation of both endpoints, not a one-shot read.
+          found=false
+          for i in $(seq 1 90); do
+            if [ -s client-side/client-live-probe-result.txt ]; then
+              found=true
+              break
+            fi
+            sleep 2
+          done
+
+          echo "stop" > server-side/stdin.pipe
+          graceful=false
+          for i in $(seq 1 30); do
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              graceful=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$graceful" != "true" ]; then
+            kill -9 "$server_pid" 2>/dev/null || true
+          fi
+          kill -9 "$client_pid" 2>/dev/null || true
+          kill -9 "$xvfb_pid" 2>/dev/null || true
+          exec 9>&-
+          rm -f server-side/stdin.pipe
+
+          if [ "$found" != "true" ]; then
+            echo "::error::the client never wrote a live-probe result -- it may have disconnected or stalled. client-boot.log:"
+            cat client-side/client-boot.log || true
+            exit 1
+          fi
+          cat client-side/client-live-probe-result.txt
+          status=$(sed -n '1p' client-side/client-live-probe-result.txt)
+          source_block=$(sed -n '2p' client-side/client-live-probe-result.txt)
+          dest_block=$(sed -n '4p' client-side/client-live-probe-result.txt)
+
+          if [ "$status" = "TIMEOUT_NO_ACK" ]; then
+            echo "::error::the client's watch window expired before it ever saw the attempt-acknowledged file -- this would be a pre-attempt timeout masquerading as cancellation evidence, not genuine denial proof. This must never be treated as UNCHANGED."
+            exit 1
+          fi
+          if [ "$status" != "UNCHANGED" ]; then
+            echo "::error::expected the client to observe both endpoints UNCHANGED after the real denial, got status '$status'"
+            exit 1
+          fi
+          if [ "$source_block" != "minecraft:dirt" ]; then
+            echo "::error::expected the client to still observe the source as minecraft:dirt (unchanged), got '$source_block'"
+            exit 1
+          fi
+          if [ "$dest_block" != "minecraft:air" ]; then
+            echo "::error::expected the client to still observe the destination as minecraft:air (unchanged), got '$dest_block'"
+            exit 1
+          fi
+          echo "confirmed: a real, already-connected client independently observed BOTH endpoints genuinely unchanged, with its own bounded observation window measured from a genuine post-denial acknowledgment signal (not merely from baseline capture), after a real, specific outcome=PROTECTED world-border denial -- never NO_CHANCE/a dropped command/a pre-attempt timeout/a disconnected client standing in for it -- genuine client-synchronization evidence of the rejected/canceled-unchanged case"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: client-sync-acceptance-rejected-evidence
+          path: |
+            server-side/server-boot.log
+            client-side/client-boot.log
+            client-side/client-live-probe-result.txt
+            client-side/client-ready-signal.txt
+            client-side/attempt-acknowledged.txt
+          if-no-files-found: warn
