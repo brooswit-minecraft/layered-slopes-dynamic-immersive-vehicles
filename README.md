@@ -193,7 +193,8 @@ This is a bounded, multi-slice implementation. Current slice:
       own real packaged jar and the pinned layered-slopes/layered-slope-grading release jars, and
       boots the real, complete 7-modid replacement stack (DIV + its deps + layered-slopes +
       layered-slope-grading + this compat mod) together, requiring the real `Done (` line, all 7
-      expected mod ids, `Found 0 mod requirements missing`, a real graceful shutdown (all three
+      expected mod ids, the absence of any real `ModLoadingException`/`FAILED TO START` failure
+      marker, a real graceful shutdown (all three
       vanilla/NeoForge shutdown markers independently), and the real generated
       `layeredslopesdynamicimmersivevehicles-server.toml` genuinely defaulting `erosionEnabled` to
       `false`. Records an immutable sha256/sha512 artifact-hash manifest naming the DIV commit SHA,

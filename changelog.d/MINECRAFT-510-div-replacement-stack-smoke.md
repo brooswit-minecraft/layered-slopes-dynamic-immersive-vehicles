@@ -12,7 +12,8 @@ bump: minor
   - `full-replacement-stack-smoke`: additionally builds this mod's own real packaged jar and the
     pinned layered-slopes/layered-slope-grading release jars, and boots the real, complete 7-modid
     replacement stack together, requiring the real `Done (` line, all 7 expected mod ids,
-    `Found 0 mod requirements missing`, a real graceful shutdown, and the real generated config
+    the absence of any real `ModLoadingException`/`FAILED TO START` failure marker, a real
+    graceful shutdown, and the real generated config
     defaulting `erosionEnabled` to `false`. Records an immutable sha256/sha512 artifact-hash
     manifest naming the DIV commit SHA and every jar's hash.
 

@@ -316,10 +316,20 @@ jobs:
               exit 1
             fi
           done
-          if ! grep -qi 'Found 0 mod requirements missing' boot.log; then
-            echo "::error::did not find the expected '0 mod requirements missing' line -- a dependency failed to resolve"
-            exit 1
-          fi
+          # A real missing/incompatible required dependency makes NeoForge throw
+          # ModLoadingException and the server never reaches "Done (" at all (proven by this
+          # repo's own dependency-failure-acceptance.yml/incompatible-version-acceptance.yml
+          # jobs). There is no separate "0 mod requirements missing" success line to look for --
+          # that phrase was never actually observed in a real log; reaching "Done (" above
+          # already proves every required dependency resolved. Assert the absence of the real
+          # failure markers explicitly anyway, the same content-not-exit-code discipline used
+          # throughout this repo's CI.
+          for marker in 'ModLoadingException' 'FAILED TO START'; do
+            if grep -qF "$marker" boot.log; then
+              echo "::error::found '$marker' in boot.log even though the server reported 'Done (' -- investigate"
+              exit 1
+            fi
+          done
           if ! grep -qF 'graceful=true' shutdown-status.txt; then
             echo "::error::the server did not exit on its own within 30s of the real stdin 'stop' command"
             exit 1
