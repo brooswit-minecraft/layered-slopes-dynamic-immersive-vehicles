@@ -12,10 +12,13 @@ bump: minor
   Every real `MutationRequest` this builds has `propagationScopeKnown=false`, since no
   neighbor/cave-in consequence analysis is implemented anywhere in this mod yet -- every real
   `authorize()` call is denied by construction until that changes, regardless of whether a
-  protection adapter exists. Also accepts an injectable destination-loaded `Predicate<BlockPos>`
-  (package-only, defaulting to the real `level::hasChunkAt` in both public overloads) so a test
-  can deterministically fake a destination as unloaded without depending on real chunk-loading
-  behavior.
+  protection adapter exists. Also accepts injectable, package-only destination-loaded
+  (`Predicate<BlockPos>`) and feasibility-check (`SmoothFeasibilityCheck`, matching
+  `Smoothing.canSmooth`'s signature) seams, both defaulting to the real
+  `level::hasChunkAt`/`Smoothing::canSmooth` in every public overload, so a test can
+  deterministically fake a destination as unloaded AND prove `canSmooth` itself was never
+  queried for it -- not merely that no mutation happened, which a reordered implementation could
+  still satisfy.
 - `ErosionAttemptGameTests`: 10 real-world acceptance cases -- default-closed denial, a granting
   adapter still denied because propagation scope is never claimed known in production, a
   known-scope granting adapter actually applying a move (with source+destination layer-count
@@ -23,9 +26,10 @@ bump: minor
   consuming the dedup slot, no-valid-direction when every horizontal neighbor blocks the move, an
   off-thread call denied (bounded join with safe worker interrupt/cleanup on timeout) before
   touching anything or consuming the dedup slot, an unloaded source denied without force-loading
-  it or consuming the dedup slot, and a deterministic instrumented-seam test proving an unloaded
-  destination is skipped before `Smoothing.canSmooth`/`smooth` ever run for it (a real
-  otherwise-valid move whose absence of mutation is the proof, not an inference from the outcome
-  enum alone). A real-chunk-boundary version of that last case was implemented and passed
-  locally, but proved environment-dependent on the real GitHub Actions runner and was reverted
-  in favor of the instrumented-seam version -- see the trailing comment in that file.
+  it or consuming the dedup slot, and a deterministic instrumented-seam test proving
+  `Smoothing.canSmooth` is never queried for an unloaded destination (a throwing fake catches it
+  immediately if it is; verified to actually fail by temporarily reordering the production check
+  and confirming the test caught it, then reverting). A real-chunk-boundary version of that last
+  case was implemented and passed locally, but proved environment-dependent on the real GitHub
+  Actions runner and was reverted in favor of the instrumented-seam version -- see the trailing
+  comment in that file.

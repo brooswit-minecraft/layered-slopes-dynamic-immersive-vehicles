@@ -68,11 +68,14 @@ This is a bounded, multi-slice implementation. Current slice:
       dedup, a denied attempt and a failed roll each still consuming the dedup slot,
       no-valid-direction, an off-thread call denied (bounded join with safe worker
       interrupt/cleanup on timeout) before touching anything, an unloaded source denied without
-      force-loading it, and a deterministic instrumented-seam test proving an unloaded
-      destination is skipped before `Smoothing`/mutation ever runs for it -- using an injectable
-      destination-loaded predicate rather than real chunk state, after an earlier real-chunk
-      version of that last case passed locally but proved environment-dependent on the real
-      GitHub Actions runner) prove it against a real world, not primitives in isolation.
+      force-loading it, and a deterministic instrumented-seam test proving `Smoothing.canSmooth`
+      itself is never even queried for an unloaded destination -- not just "no mutation
+      happened," which a reordered implementation (query first, skip mutation after) could still
+      satisfy -- using injectable destination-loaded/feasibility-check seams rather than real
+      chunk state, after an earlier real-chunk version of that case passed locally but proved
+      environment-dependent on the real GitHub Actions runner. The seam's own sensitivity was
+      verified by temporarily reordering the production check, confirming the test fails, then
+      reverting) prove it against a real world, not primitives in isolation.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
       above), a concrete propagation/claim-aware `ProtectionAdapter` (its real scope is defined by

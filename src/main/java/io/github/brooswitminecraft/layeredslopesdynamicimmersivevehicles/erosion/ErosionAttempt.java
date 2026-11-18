@@ -60,10 +60,17 @@ public final class ErosionAttempt {
         APPLIED
     }
 
+    /** Matches {@code Smoothing.canSmooth}'s signature so a test can intercept/count/throw on it. */
+    @FunctionalInterface
+    interface SmoothFeasibilityCheck {
+        boolean canSmooth(ServerLevel level, BlockPos pos, Direction direction);
+    }
+
     public static Outcome attempt(ServerLevel level, BlockPos pos, double slipSpeedMs, double wheelLoadKg,
                                    RandomSource random, ErosionConfig config, ErosionDedup dedup,
                                    ErosionProtectionGate gate) {
-        return attempt(level, pos, slipSpeedMs, wheelLoadKg, random, config, dedup, gate, false, level::hasChunkAt);
+        return attempt(level, pos, slipSpeedMs, wheelLoadKg, random, config, dedup, gate, false,
+                level::hasChunkAt, Smoothing::canSmooth);
     }
 
     /**
@@ -77,22 +84,24 @@ public final class ErosionAttempt {
                             RandomSource random, ErosionConfig config, ErosionDedup dedup,
                             ErosionProtectionGate gate, boolean propagationScopeKnownForTest) {
         return attempt(level, pos, slipSpeedMs, wheelLoadKg, random, config, dedup, gate,
-                propagationScopeKnownForTest, level::hasChunkAt);
+                propagationScopeKnownForTest, level::hasChunkAt, Smoothing::canSmooth);
     }
 
     /**
-     * Package-only instrumented seam (review 54884/54886/54888): {@code destinationLoadedCheck}
-     * lets a test deterministically fake a specific destination as unloaded, proving the
-     * candidate is skipped before {@code Smoothing}/protection/mutation ever run for it --
-     * without depending on real chunk-loading behavior, which proved to differ between
-     * environments in an earlier, reverted attempt at this same regression. Production always
-     * passes the real {@code level::hasChunkAt} via the two overloads above; this one is never
-     * called from production code.
+     * Package-only instrumented seam (review 54884/54886/54888/54890): {@code
+     * destinationLoadedCheck} lets a test deterministically fake a specific destination as
+     * unloaded; {@code canSmoothCheck} lets a test prove {@code Smoothing.canSmooth} itself is
+     * never even queried for that candidate -- "no mutation happened" alone does not prove "no
+     * query happened" (a reordered implementation could query first and still skip the mutation
+     * afterward). Neither seam depends on real chunk-loading behavior, which proved to differ
+     * between environments in an earlier, reverted attempt at this same regression. Production
+     * always passes the real {@code level::hasChunkAt}/{@code Smoothing::canSmooth} via the two
+     * overloads above; this one is never called from production code.
      */
     static Outcome attempt(ServerLevel level, BlockPos pos, double slipSpeedMs, double wheelLoadKg,
                             RandomSource random, ErosionConfig config, ErosionDedup dedup,
                             ErosionProtectionGate gate, boolean propagationScopeKnownForTest,
-                            Predicate<BlockPos> destinationLoadedCheck) {
+                            Predicate<BlockPos> destinationLoadedCheck, SmoothFeasibilityCheck canSmoothCheck) {
         if (!level.getServer().isSameThread()) {
             return Outcome.OFF_THREAD;
         }
@@ -125,7 +134,7 @@ public final class ErosionAttempt {
             if (!destinationLoadedCheck.test(destination)) {
                 continue;
             }
-            if (!Smoothing.canSmooth(level, pos, direction)) {
+            if (!canSmoothCheck.canSmooth(level, pos, direction)) {
                 continue;
             }
             ErosionProtectionGate.MutationRequest request = new ErosionProtectionGate.MutationRequest(

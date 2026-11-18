@@ -365,14 +365,14 @@ public final class ErosionAttemptGameTests {
     // instrumented-seam test below (review 54884/54886/54888).
 
     /**
-     * Regression (review 54884/54886/54888): proves the destination-loaded check is ordered
-     * before {@code Smoothing}/protection/mutation for that candidate, deterministically --
-     * without depending on real chunk-loading behavior, which proved to differ between
-     * environments in the reverted attempt above. {@code destination} is constructed as a REAL,
-     * otherwise-valid move (air destination, stone support): if the implementation incorrectly
-     * called {@code Smoothing.canSmooth}/{@code smooth} despite the injected "unloaded" result,
-     * the world WOULD show a real mutation -- its absence is the proof, not an inference from
-     * the outcome enum alone.
+     * Regression (review 54884/54886/54888/54890): proves the destination-loaded check is
+     * ordered before {@code Smoothing.canSmooth} itself is ever queried for that candidate --
+     * not merely that no mutation happened, which a reordered implementation (query first, skip
+     * mutation after) could still satisfy. {@code canSmoothCheck} throws if ever invoked for the
+     * faked-unloaded EAST destination; it delegates to the real {@code Smoothing.canSmooth} for
+     * every other direction, so the blocked WEST/NORTH/SOUTH candidates are still exercised
+     * normally. Deterministic regardless of environment -- no real chunk-loading behavior
+     * involved, unlike the reverted real-chunk attempt above.
      */
     @GameTest(template = "flat_platform")
     public static void anUnloadedDestinationIsSkippedBeforeAnySmoothingOrMutationCall(GameTestHelper helper) {
@@ -386,11 +386,19 @@ public final class ErosionAttemptGameTests {
         BlockPos absoluteEastDestination = helper.absolutePos(eastDestination);
         java.util.function.Predicate<BlockPos> fakeUnloadedAtEastDestinationOnly =
                 candidate -> !candidate.equals(absoluteEastDestination);
+        ErosionAttempt.SmoothFeasibilityCheck failIfQueriedForEastDestination = (lvl, candidatePos, direction) -> {
+            if (direction == Direction.EAST) {
+                throw new AssertionError("Smoothing.canSmooth must never be queried for a candidate "
+                        + "whose destination chunk the loaded-check reported as unloaded");
+            }
+            return io.github.brooswitminecraft.layeredslopegrading.Smoothing.canSmooth(lvl, candidatePos, direction);
+        };
 
         ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(
                 (ServerLevel) helper.getLevel(), helper.absolutePos(pos),
                 SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
-                GUARANTEED_CHANCE_CONFIG, new ErosionDedup(), gate, true, fakeUnloadedAtEastDestinationOnly);
+                GUARANTEED_CHANCE_CONFIG, new ErosionDedup(), gate, true,
+                fakeUnloadedAtEastDestinationOnly, failIfQueriedForEastDestination);
 
         helper.assertTrue(outcome == ErosionAttempt.Outcome.NO_VALID_DIRECTION,
                 "the only real candidate's destination was faked unloaded, so it must be skipped entirely, got " + outcome);
