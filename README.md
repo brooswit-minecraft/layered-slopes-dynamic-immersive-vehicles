@@ -40,10 +40,18 @@ This is a bounded, multi-slice implementation. Current slice:
       neighbor/cave-in propagation after an authorized move, and no existing third-party
       claim/protection mod automatically gains coverage from it — both explicitly named gaps for
       whichever erosion consumer slice needs that coverage to implement and test it.
-- [ ] Erosion consumer (server-thread authoritative, per-tick dedup, multiplayer sync, default
-      OFF), the explicit propagation/claim-adapter protection policy that seam above does not
-      itself provide, GameTest acceptance evidence for actual gameplay behavior, dependency-
-      failure tests, pinned-jar smoke acceptance.
+- [x] Protection/dedup policy primitives: `ErosionDedup` (at most one roll-and-mutation attempt
+      per dimension/block/tick, including a rejected attempt, with bounded per-tick lifecycle
+      storage) and `ErosionProtectionGate` (a hard, code-level gate defaulting to NOT asserted
+      -- fails closed -- that the erosion consumer must check before any real world mutation;
+      opening it requires an explicit, specific coverage description, never a vague claim).
+      Pure logic, no Minecraft/NeoForge dependency; the gate still records that full
+      propagation/neighbor/cave-in coverage is NOT yet implemented or asserted.
+- [ ] Erosion consumer itself (server-thread authoritative, wiring the policy primitives above
+      together with real per-wheel telemetry and `Smoothing.smooth()`, multiplayer sync, default
+      OFF), the explicit propagation/claim-adapter protection implementation the gate above is
+      currently withholding, GameTest acceptance evidence for actual gameplay behavior,
+      dependency-failure tests, pinned-jar smoke acceptance.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 will default to OFF; operators running this mod alongside Dynamic Terrain's deprecated vehicle
