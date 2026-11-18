@@ -149,7 +149,18 @@ jobs:
           fi
           echo "verified against WorldBorder#isWithinBounds's real strict-upper-bound semantics (x >= min && x < max): border_max_x=$border_max_x, source_x=$source_x (inside), dest_x=$dest_x (outside)"
 
-          printf 'worldborder center %s 0\n' "$border_center_x" > server-side/stdin.pipe
+          # A first real CI run of this exact fix reported outcome=APPLIED, not PROTECTED -- the
+          # server log showed "Set the center of the world border to 0.50, 0.50", not 0.00, 0.00,
+          # even though "0 0" was sent. Root cause, verified against the real vanilla command
+          # parser: /worldborder center's argument type is Vec2Argument.vec2(), constructed with
+          # centerCorrect=true, and WorldCoordinate#parseDouble adds +0.5 to any bare integer
+          # coordinate with no decimal point when centerCorrect is true. With the real center at
+          # (0.5, 0.5) and size 180, the real max X was 90.5, not the 90.0 this script assumed --
+          # x=90 (90 < 90.5) was still genuinely INSIDE, so the destination mutation was allowed.
+          # Fixed by passing explicit decimals ("0.0"), which WorldCoordinate#parseDouble takes
+          # literally (its centering only applies when the string contains no "."), so the real
+          # in-game center now matches this script's own arithmetic exactly.
+          printf 'worldborder center %s.0 0.0\n' "$border_center_x" > server-side/stdin.pipe
           sleep 1
           printf 'worldborder set %s\n' "$border_size" > server-side/stdin.pipe
           sleep 2

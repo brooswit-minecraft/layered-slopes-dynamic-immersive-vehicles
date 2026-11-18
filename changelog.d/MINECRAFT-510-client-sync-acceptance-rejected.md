@@ -29,3 +29,10 @@ bump: minor
   pair at x=90/91 put both positions outside the border instead of isolating only the
   destination. Moved the pair to x=89/90 and corrected the inequalities to match the real API
   exactly.
+- Fixed a second real bug this surfaced: `/worldborder center 0 0` does not center the border at
+  exactly (0, 0) -- vanilla's `Vec2Argument.vec2()` is constructed with `centerCorrect=true`, and
+  `WorldCoordinate#parseDouble` adds `+0.5` to any bare-integer coordinate with no decimal point,
+  confirmed live by the server log reporting "Set the center of the world border to 0.50, 0.50".
+  That 0.5 offset made the real border max X 90.5, not 90.0, so x=90 was still genuinely inside
+  and the forced attempt was `APPLIED`, not `PROTECTED`. Fixed by sending explicit decimals
+  (`0.0 0.0`), which the same parser takes literally.
