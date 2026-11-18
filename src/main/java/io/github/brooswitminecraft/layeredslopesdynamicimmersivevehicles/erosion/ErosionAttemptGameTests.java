@@ -66,9 +66,10 @@ public final class ErosionAttemptGameTests {
      * pinned Dynamic Terrain specifically so {@code DynamicTerrainPairedGameTests} can exercise
      * it. Those cases skip (rather than fail) when Dynamic Terrain is loaded, since they are not
      * testing Dynamic Terrain interaction at all -- that coverage lives entirely in
-     * {@code DynamicTerrainPairedGameTests}, which only exists in that opt-in build.
+     * {@code DynamicTerrainPairedGameTests}, which only exists in that opt-in build. Also used
+     * by {@code ErosionModConfigGameTests} for the same reason.
      */
-    private static boolean dynamicTerrainIsLoaded() {
+    static boolean dynamicTerrainIsLoaded() {
         return ModList.get().isLoaded("dynamicterrain");
     }
 
@@ -104,6 +105,10 @@ public final class ErosionAttemptGameTests {
      */
     @GameTest(template = "flat_platform")
     public static void erosionDisabledDeniesBeforeTouchingAnythingAndDoesNotConsumeTheDedupSlot(GameTestHelper helper) {
+        if (dynamicTerrainIsLoaded()) {
+            helper.succeed();
+            return;
+        }
         BlockPos pos = new BlockPos(1, 2, 1);
         placeSourceWithOneValidEastNeighbor(helper, pos);
         ServerLevel level = (ServerLevel) helper.getLevel();

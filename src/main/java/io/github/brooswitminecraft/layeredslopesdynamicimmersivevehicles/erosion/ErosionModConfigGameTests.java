@@ -58,6 +58,14 @@ public final class ErosionModConfigGameTests {
      */
     @GameTest(template = "flat_platform")
     public static void liveConfigFileEditTogglesErosionEnabledWithoutARestart(GameTestHelper helper) {
+        if (ErosionAttemptGameTests.dynamicTerrainIsLoaded()) {
+            // Not testing Dynamic Terrain interaction -- under the opt-in dtPairedRuntime
+            // profile with its own caveInsEnabled=true, a real enabled attempt correctly denies
+            // via NEIGHBOR_CAVE_IN_RISK regardless of erosionEnabled, which this test is not
+            // about. Same reasoning as ErosionAttemptGameTests' own DT-absence guard.
+            helper.succeed();
+            return;
+        }
         helper.assertTrue(pollForEnabled(false, 1),
                 "preconditions: erosionEnabled must start false for this test");
 
