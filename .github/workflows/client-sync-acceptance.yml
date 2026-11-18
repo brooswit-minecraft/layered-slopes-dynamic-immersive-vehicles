@@ -102,13 +102,15 @@ jobs:
           # detecting the join) never even appear in that server log -- they lost the race
           # entirely. Doing this before the client exists removes the race.
           #
-          # A subsequent run (after fixing runServer's standardInput wiring) showed the final
-          # "stop" command DOES now reach the server (real Stopping server/Saving worlds lines
-          # appeared), but setblock/erosionclientsynctest -- sent within ~1s of "Done (" --
-          # still didn't land. Gradle's own stdin-forwarding to the forked JVM appears to need a
-          # moment to actually come up after the task starts; retry with a real confirmation
-          # check (the real "Changed the block at" line vanilla's own setblock command prints)
-          # rather than guessing a fixed delay.
+          # A subsequent run (after fixing runServer's standardInput wiring) proved
+          # console-command injection genuinely works now: the server's own real response,
+          # "That position is not loaded", appeared repeatedly -- not a missing-command
+          # symptom at all. The real cause: nobody has ever been near (0,-59,0) yet (the
+          # client hasn't even started), so that chunk was never loaded server-side. Vanilla's
+          # own `forceload` command loads and keeps a chunk loaded regardless of player
+          # proximity -- do that first.
+          printf 'forceload add 0 0\n' > server-side/stdin.pipe
+          sleep 2
           for attempt in 1 2 3 4 5; do
             printf 'setblock 0 -59 0 minecraft:dirt\n' > server-side/stdin.pipe
             sleep 3
@@ -116,7 +118,7 @@ jobs:
             echo "diagnostic: setblock attempt $attempt did not land yet, retrying"
           done
           if ! grep -qF 'Changed the block at' server-side/server-boot.log; then
-            echo "::error::setblock never reached the server after 5 attempts -- console-command injection is not working. server-boot.log tail:"
+            echo "::error::setblock never reached the server after 5 attempts -- see server-boot.log tail:"
             tail -20 server-side/server-boot.log
             kill -9 "$server_pid" 2>/dev/null || true
             exit 1
@@ -183,6 +185,17 @@ jobs:
             sleep 7
           done
           tail -10 server-side/server-boot.log
+
+          # The real client's own render/simulation distance is centered on the player's real
+          # position, which vanilla spawn-finding placed far from (0,-59,0) in every run so far
+          # (e.g. observed around (101, 79, -188)) -- forceload only keeps that chunk loaded
+          # server-side, it does not make the CLIENT track or download it. Move the player there
+          # so the client genuinely receives and renders the real chunk data for that position,
+          # rather than reading stale/placeholder data for a chunk it never actually tracked.
+          if grep -qE 'joined the game' server-side/server-boot.log; then
+            printf 'tp @a 0 -60.5 0\n' > server-side/stdin.pipe
+            sleep 3
+          fi
 
           # The block/attempt setup already happened before the client ever started, so the
           # only remaining real signal is the client's own probe result file -- written
