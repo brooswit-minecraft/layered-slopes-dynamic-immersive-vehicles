@@ -226,7 +226,7 @@ This is a bounded, multi-slice implementation. Current slice:
       conservation `ErosionAttemptGameTests` already proves in isolation, now proven live from an
       actual connected client's own perspective, using the exact same deterministic block
       arrangement and `GUARANTEED_CHANCE_CONFIG` values.
-- [x] Client-sync acceptance, rejected/canceled-unchanged case, with LIVE post-join evidence
+- [ ] Client-sync acceptance, rejected/canceled-unchanged case, with LIVE post-join evidence
       (direction, comment 55058/55111/55114/55137): a third opt-in
       `client-sync-acceptance-rejected.yml` workflow completes the pair -- a REAL, SPECIFIC
       denial (never merely the absence of a mutation, and
@@ -245,7 +245,12 @@ This is a bounded, multi-slice implementation. Current slice:
       structurally ruling out a delayed harness letting the client's own timer expire before the
       attempt even ran and still passing for the wrong reason (review finding 55137); a timeout
       with the acknowledge file never seen reports the distinct `TIMEOUT_NO_ACK` status, never
-      folded into `UNCHANGED`.
+      folded into `UNCHANGED`. Implemented; not yet CI-verified at the current head -- a review
+      finding caught that the prior `source<=max`/`dest>max` comparison did not match
+      `WorldBorder#isWithinBounds`'s real strict-upper-bound semantics (`x >= min && x < max`),
+      putting both positions outside the border instead of isolating only the destination; fixed
+      by moving the source/destination pair to x=89/90 and correcting the inequality checks, CI
+      re-run pending.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
       above), multiplayer sync, and gameplay acceptance evidence.

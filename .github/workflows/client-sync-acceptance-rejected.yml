@@ -13,11 +13,12 @@ name: Client-sync acceptance, rejected/canceled unchanged case (opt-in)
 # preflight uses) evidently bypasses it (outcome=APPLIED, not PROTECTED). ClaimProtection's own
 # FIRST, unconditional check -- !level.getWorldBorder().isWithinBounds(pos) -- involves no
 # FakePlayer at all: /worldborder shrinks the real border so its own max X falls exactly between
-# the source and destination X coordinates (deterministic exact comparison, not approximation).
-# The attempt uses the EXACT same guaranteed-chance config/slip/load as the enabled case
-# (client-sync-acceptance-enabled.yml), so the only reason the attempt can be denied is this real
-# border check, never chance or direction -- requiring the server to report the specific
-# outcome=PROTECTED, not any other denial outcome.
+# the source and destination X coordinates, matching WorldBorder#isWithinBounds's own real
+# strict-upper-bound semantics (x >= min && x < max), verified with checked arithmetic below
+# rather than assumed. The attempt uses the EXACT same guaranteed-chance config/slip/load as the
+# enabled case (client-sync-acceptance-enabled.yml), so the only reason the attempt can be
+# denied is this real border check, never chance or direction -- requiring the server to report
+# the specific outcome=PROTECTED, not any other denial outcome.
 #
 # Review finding (55137): a plain fixed-tick timer started at baseline capture does not
 # structurally prove the observation continued AFTER the real denial was acknowledged -- a
@@ -115,31 +116,38 @@ jobs:
           # (outcome=APPLIED, not PROTECTED) -- NeoForge's FakePlayer is apparently exempt.
           # ClaimProtection#mayMutate's own FIRST check, the real world border
           # (!level.getWorldBorder().isWithinBounds(pos)), involves no FakePlayer at all and is
-          # unconditional -- shrink it so the real border's own max X (center + half-size)
-          # falls exactly between the source and destination X coordinates: source at x=90 is
-          # inside (<= max), destination at x=91 is outside (> max), by deterministic exact
-          # comparison, not approximation. Keep the player and its connection well inside the
-          # border (near x=85) so only the destination itself is excluded.
+          # unconditional.
+          #
+          # Review finding (exact head 410946146): the prior version of this check used
+          # source_x<=max / dest_x>max and described x=90 as "inside" a border with max=90 --
+          # but the real net.minecraft.world.level.border.WorldBorder#isWithinBounds(double,
+          # double,double) is `x >= getMinX() && x < getMaxX()`, a STRICT upper bound. At x=90
+          # with max=90, 90 < 90 is false, so x=90 is already OUTSIDE -- the prior test
+          # accidentally put BOTH the source and destination outside the border instead of
+          # isolating only the destination. Fixed by shifting both positions down by one: source
+          # at x=89 is genuinely inside (89 < 90), destination at x=90 is genuinely outside (90
+          # is NOT < 90) -- matching the real API's own inequality, not an assumed one.
           border_center_x=0
           border_size=180
-          source_x=90
-          dest_x=91
+          source_x=89
+          dest_x=90
           border_max_x=$((border_center_x + border_size / 2))
           # Verify the actual inequalities with real arithmetic against the values this script
-          # is about to apply, rather than describing them in a comment without checking: the
-          # source must be <= the real border's max X (inside) and the destination must be
-          # strictly greater (outside).
-          if [ "$source_x" -gt "$border_max_x" ]; then
-            echo "::error::source_x=$source_x is NOT <= border_max_x=$border_max_x -- the source would also be outside the border, invalidating this test's isolation of the destination"
+          # is about to apply, matching WorldBorder#isWithinBounds's real strict-upper-bound
+          # semantics (x >= min && x < max): the source must be strictly LESS than the real
+          # border's max X (inside) and the destination must be greater than or equal to it
+          # (outside).
+          if [ "$source_x" -ge "$border_max_x" ]; then
+            echo "::error::source_x=$source_x is NOT < border_max_x=$border_max_x -- WorldBorder#isWithinBounds requires x < max (a strict upper bound), so the source would also be outside the border, invalidating this test's isolation of the destination"
             kill -9 "$server_pid" 2>/dev/null || true
             exit 1
           fi
-          if [ "$dest_x" -le "$border_max_x" ]; then
-            echo "::error::dest_x=$dest_x is NOT > border_max_x=$border_max_x -- the destination would still be inside the border, so no denial would occur"
+          if [ "$dest_x" -lt "$border_max_x" ]; then
+            echo "::error::dest_x=$dest_x is NOT >= border_max_x=$border_max_x -- WorldBorder#isWithinBounds requires x < max, so the destination would still be inside the border and no denial would occur"
             kill -9 "$server_pid" 2>/dev/null || true
             exit 1
           fi
-          echo "verified: border_max_x=$border_max_x, source_x=$source_x (inside), dest_x=$dest_x (outside) -- exact inequalities hold"
+          echo "verified against WorldBorder#isWithinBounds's real strict-upper-bound semantics (x >= min && x < max): border_max_x=$border_max_x, source_x=$source_x (inside), dest_x=$dest_x (outside)"
 
           printf 'worldborder center %s 0\n' "$border_center_x" > server-side/stdin.pipe
           sleep 1
@@ -149,18 +157,18 @@ jobs:
           sleep 2
           for attempt in 1 2 3 4 5; do
             {
-              printf 'setblock 90 -59 0 minecraft:dirt\n'
-              printf 'setblock 91 -59 0 minecraft:air\n'
-              printf 'setblock 91 -60 0 minecraft:stone\n'
-              printf 'setblock 89 -59 0 minecraft:stone\n'
-              printf 'setblock 90 -59 1 minecraft:stone\n'
-              printf 'setblock 90 -59 -1 minecraft:stone\n'
+              printf 'setblock 89 -59 0 minecraft:dirt\n'
+              printf 'setblock 90 -59 0 minecraft:air\n'
+              printf 'setblock 90 -60 0 minecraft:stone\n'
+              printf 'setblock 88 -59 0 minecraft:stone\n'
+              printf 'setblock 89 -59 1 minecraft:stone\n'
+              printf 'setblock 89 -59 -1 minecraft:stone\n'
             } > server-side/stdin.pipe
             sleep 3
-            grep -qF 'Changed the block at 90, -59, 0' server-side/server-boot.log 2>/dev/null && break
+            grep -qF 'Changed the block at 89, -59, 0' server-side/server-boot.log 2>/dev/null && break
             echo "diagnostic: setup attempt $attempt did not land yet, retrying"
           done
-          if ! grep -qF 'Changed the block at 90, -59, 0' server-side/server-boot.log; then
+          if ! grep -qF 'Changed the block at 89, -59, 0' server-side/server-boot.log; then
             echo "::error::world setup never reached the server after 5 attempts -- see server-boot.log tail:"
             tail -20 server-side/server-boot.log
             kill -9 "$server_pid" 2>/dev/null || true
@@ -176,8 +184,8 @@ jobs:
           timeout 600 ./gradlew runClient --no-daemon \
               -PerosionClientSyncLiveProbe=true \
               -PerosionClientSyncQuickPlay=localhost:25579 \
-              -PerosionClientSyncLiveProbeSourcePos=90,-59,0 \
-              -PerosionClientSyncLiveProbeDestPos=91,-59,0 \
+              -PerosionClientSyncLiveProbeSourcePos=89,-59,0 \
+              -PerosionClientSyncLiveProbeDestPos=90,-59,0 \
               -PerosionClientSyncLiveProbeReadySignalFile="$(pwd)/client-ready-signal.txt" \
               -PerosionClientSyncLiveProbeAcknowledgeFile="$(pwd)/attempt-acknowledged.txt" \
               -PerosionClientSyncLiveProbeOutputFile="$(pwd)/client-live-probe-result.txt" \
@@ -229,7 +237,7 @@ jobs:
             exit 1
           fi
 
-          printf 'erosionclientsynctest 90 -59 0 5.0 300.0\n' > server-side/stdin.pipe
+          printf 'erosionclientsynctest 89 -59 0 5.0 300.0\n' > server-side/stdin.pipe
           sleep 3
           # Require the exact, specific real denial -- never a different outcome standing in for
           # it (NO_CHANCE, NO_VALID_DIRECTION, etc. would all also leave the world unchanged, but

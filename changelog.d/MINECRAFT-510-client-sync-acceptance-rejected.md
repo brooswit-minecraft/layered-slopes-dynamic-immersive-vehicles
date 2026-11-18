@@ -23,3 +23,9 @@ bump: minor
   into `UNCHANGED`) if it never appears within the overall bound. Also adds explicit,
   checked arithmetic verifying the world-border inequalities actually hold, rather than relying
   on a comment describing them.
+- Fixed: the checked arithmetic itself used `source<=max`/`dest>max`, which does not match the
+  real `WorldBorder#isWithinBounds(double,double,double)` semantics (`x >= min && x < max`, a
+  strict upper bound) -- at `max=90`, `x=90` is already outside, so the prior source/destination
+  pair at x=90/91 put both positions outside the border instead of isolating only the
+  destination. Moved the pair to x=89/90 and corrected the inequalities to match the real API
+  exactly.
