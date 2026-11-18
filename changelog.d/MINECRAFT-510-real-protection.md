@@ -6,13 +6,16 @@ bump: minor
   `BlockEvent.BreakEvent` through a fake player and honor cancellation, applied at both the
   source and destination of each erosion move. Also checks the server's own world border and
   spawn protection, which `BreakEvent` cancellation alone does not establish.
-- `DynamicTerrainCaveInRisk`: a real, maximally conservative check for Dynamic Terrain's cave-ins
-  -- the one concretely-named external propagation risk this ticket's reviews identified. An
-  earlier, narrower version tried to exclude source/destination from a face-adjacent-neighbor tag
-  scan; review 54907/54908 found that rested on today's shipped tag contents and call ordering
-  (either could change) and treated an unloaded neighbor as proven-safe rather than unknown.
-  Simplified to the one claim fully verifiable and enforceable: if Dynamic Terrain is loaded at
-  all, deny every attempt (reads only its mod id as data, never its Java classes).
+- `DynamicTerrainCaveInRisk`: a real check for Dynamic Terrain's cave-ins -- the one
+  concretely-named external propagation risk this ticket's reviews identified. Two earlier,
+  narrower designs each overclaimed: a face-adjacent-neighbor tag scan (review 54907/54908 --
+  rested on today's shipped tag contents/call ordering and treated an unloaded neighbor as
+  proven-safe rather than unknown), then an unconditional "deny whenever Dynamic Terrain is
+  loaded at all" rule (review 54910 -- more conservative than necessary). Verified directly
+  against DT's own source (review 54915): its cave-in handler does nothing when its own
+  `caveInsEnabled` config (default `false`) is `false`. Now reads that real, live config value
+  through NeoForge's public, generic `ModConfigs.getModConfigs(modId)` API (never DT's Java
+  classes), failing closed on any absence/read failure/unexpected type.
 - `ErosionAttempt` now enforces both checks as mandatory, unconditional steps before any
   `Smoothing.smooth()` call -- not behind an optional, separately-installed adapter -- plus a
   final re-verification immediately before applying: `canSmooth` AND an exact source/destination
@@ -22,12 +25,13 @@ bump: minor
   original configuration apart from a DIFFERENT one that happens to still be smoothable).
 
 ### Known limitation
-- Dynamic Terrain coexistence (review 54910): `DynamicTerrainCaveInRisk` denies every attempt
-  whenever Dynamic Terrain is loaded at all, with no partial/opt-in coexistence. A finite
-  supported policy would require replicating DT's own recursive `SupportSearch`-based
-  connectivity check (bounded to 256 visited cells) to prove a specific move cannot destabilize
-  a reachable DT-tagged block -- a substantial, independent reimplementation not attempted in
-  this slice. Flagged explicitly as an open product question, not claimed as resolved.
+- Dynamic Terrain coexistence (narrowed by review 54915, not eliminated): a world running Dynamic
+  Terrain with `caveInsEnabled=true` (not its own default) still gets no usable erosion. A finite
+  supported policy for that configuration would require replicating DT's own recursive
+  `SupportSearch`-based connectivity check (bounded to 256 visited cells) to prove a specific move
+  cannot destabilize a reachable DT-tagged block -- a substantial, independent reimplementation
+  not attempted in this slice. Flagged explicitly as the remaining open product question, not
+  claimed as resolved.
 
 ### Changed
 - Withdrew the `ErosionProtectionGate`/`ProtectionAdapter`-routed design from `ErosionAttempt`'s
@@ -41,3 +45,8 @@ bump: minor
 - `ErosionAttempt`'s public signature dropped the now-unused `ErosionProtectionGate` parameter;
   `Outcome.DENIED_BY_PROTECTION` was replaced by `Outcome.PROTECTED` (from `ClaimProtection`) and
   `Outcome.NEIGHBOR_CAVE_IN_RISK` (from `DynamicTerrainCaveInRisk`).
+- Corrected an overclaiming comment in `ErosionAttempt`'s re-verification step (review 54915):
+  `canSmooth` only catches support changes that flip the move's own feasibility verdict, not
+  every support change -- a support block swapped for a different-but-still-sturdy one is
+  harmless and correctly still applies, which the explicit source/destination `BlockState`
+  equality check (unchanged) is what actually catches the real remaining gap.

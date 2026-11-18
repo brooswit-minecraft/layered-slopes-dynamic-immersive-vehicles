@@ -63,27 +63,31 @@ This is a bounded, multi-slice implementation. Current slice:
         check only, and explicitly not a claim of placement-hook-equivalent semantics at the
         destination.
       - `DynamicTerrainCaveInRisk`: Dynamic Terrain's cave-ins are the one concretely-named
-        external propagation risk reviews identified. An earlier, narrower version of this check
-        tried to exclude source/destination from a face-adjacent-neighbor tag scan on the theory
-        that they become untagged `layeredslopes:*` blocks -- review 54907/54908 found that rested
-        on today's shipped tag contents and today's call ordering, either of which a runtime
-        datapack or mod update could change, and that it treated an unloaded neighbor as
-        proven-safe rather than unknown. Rather than keep refining an increasingly fragile
-        exclusion rule, this now makes the one claim it can fully verify: if Dynamic Terrain is
-        loaded at all, every attempt is denied (reads only DT's mod id as data, never its Java
-        classes, the same optional-dependency shape `GroundSurfaces.java` already uses for Layered
-        Slopes). If DT is not loaded, there is no such risk.
+        external propagation risk reviews identified. Two earlier, narrower designs were each
+        found to overclaim: a face-adjacent-neighbor tag scan (review 54907/54908 -- rested on
+        today's shipped tag contents and call ordering, and treated an unloaded neighbor as
+        proven-safe rather than unknown), then an unconditional "deny whenever Dynamic Terrain is
+        loaded at all" rule (review 54910 -- more conservative than necessary, since "DT is
+        loaded" and "DT's cave-ins are actually active" are different, independently-verifiable
+        facts). Verified directly against DT's own source (review 54915): its cave-in handler
+        returns immediately, doing nothing, whenever its own `caveInsEnabled` config value
+        (`ModConfig.Type.SERVER`, default `false`) is `false`. This now reads that real, live
+        config value through NeoForge's own public, generic, supported API
+        (`ModConfigs.getModConfigs(modId)` plus the standard `night-config` reader) -- never DT's
+        Java classes, never DT's own `ModConfigSpec.BooleanValue` field, the same
+        data/API-only optional-dependency shape `GroundSurfaces.java` already uses for Layered
+        Slopes. Any absence, read failure, or unexpected value type fails closed (treated as
+        enabled/risky), per review 54915's "unknown/unreadable/version-mismatched config remains
+        denied." If Dynamic Terrain is not loaded at all, there is no such risk to check.
 
-        **Known product limitation (review 54910):** this means a world running Dynamic Terrain
-        alongside this mod gets no usable erosion at all, not partial/opt-in coexistence. Building
-        a finite supported policy would require replicating DT's own recursive
+        **Narrowed, not eliminated, limitation:** a world running Dynamic Terrain with
+        `caveInsEnabled=true` (not the default) still gets no usable erosion -- building a finite
+        supported policy for that configuration would require replicating DT's own recursive
         `SupportSearch`-based connectivity check (`CaveIns.java`/`SupportSearch.java`, bounded to
-        256 visited cells) to prove a specific move cannot destabilize a reachable DT-tagged
-        block -- a substantial, independent reimplementation this slice does not attempt, rather
-        than guess at a narrower rule not actually verified against that algorithm. Until that
-        exists (or DT's own cave-ins are otherwise confirmed inert for a given world), unconditional
-        refusal under Dynamic Terrain is the deliberate, conservative behavior -- flagged
-        explicitly as an open product question, not claimed as resolved coexistence.
+        256 visited cells and re-checking the changed position plus all six face-adjacent
+        neighbors) to prove a specific move cannot destabilize a reachable DT-tagged block -- a
+        substantial, independent reimplementation not attempted in this slice. Flagged explicitly
+        as the remaining open product question, not claimed as resolved.
       `ErosionAttempt`'s production path is: dedup claim, the accepted MINECRAFT-555
       slip-to-probability roll, a shuffled-direction-first-`canSmooth`-accepted candidate, both
       real checks above at that candidate's source and destination, then a re-verification before
@@ -101,7 +105,7 @@ This is a bounded, multi-slice implementation. Current slice:
       candidate position's chunk is confirmed loaded before any block query, never force-loading
       one. Takes slip/load telemetry as plain parameters; makes no assumption about where it comes
       from, since DIV's own per-wheel contact-telemetry seam is not wired in yet (see below).
-      `ErosionAttemptGameTests` (15 cases) prove this against a real world: a real move applying
+      `ErosionAttemptGameTests` (17 cases) prove this against a real world: a real move applying
       and conserving material with no claim mod/Dynamic Terrain installed (the
       "missing/unsupported integration" success case), a protected source, a protected
       destination, and a detected cave-in risk each denying (via injected orchestration-seam
@@ -110,7 +114,10 @@ This is a bounded, multi-slice implementation. Current slice:
       `DynamicTerrainCaveInRisk` reports no risk when Dynamic Terrain is genuinely absent, a REAL
       `BlockEvent.BreakEvent` listener that swaps the source to a DIFFERENT but still-smoothable
       state without cancelling (proving the exact-state recheck catches what a boolean-only
-      recheck cannot), per-tick dedup, a denied attempt and a failed roll each still consuming
+      recheck cannot), a REAL listener that swaps the support block for a different-but-sturdy
+      one proving that harmless case still applies rather than being overcorrected into a denial
+      (review 54915), a direct check that an unknown config lookup fails closed to the caller's
+      fallback, per-tick dedup, a denied attempt and a failed roll each still consuming
       the dedup slot, no-valid-direction, an off-thread call denied (bounded join with safe
       worker interrupt/cleanup on timeout) before touching anything, an unloaded source denied
       without force-loading it, and a deterministic instrumented-seam test proving
@@ -145,7 +152,7 @@ they are plain JUnit 5 tests with no Minecraft/NeoForge dependency.
 ```
 
 Boots a real dedicated server with this mod, `layered-slopes`, and `layered-slope-grading`
-installed and runs the 16 GameTests (boot-only, plus `ErosionAttemptGameTests`' 15 real-world
+installed and runs the 18 GameTests (boot-only, plus `ErosionAttemptGameTests`' 17 real-world
 orchestration cases). Wired into CI via `scripts/check_gametest_count.py`, which fails closed if
 the expected test count regresses. An opt-in `div-paired-runtime.yml` workflow additionally
 builds DIV fresh and boots everything together at DIV's real NeoForge floor.

@@ -14,7 +14,7 @@ individually named, so only the completion/pass summary counts -- not a
 per-test-name substring check -- can work here.
 
 StandaloneBootGameTests.theGameTestHarnessBootsForThisMod (a trivial helper.succeed() proving the
-harness boots) plus ErosionAttemptGameTests' 15 cases: a real move applying and conserving
+harness boots) plus ErosionAttemptGameTests' 17 cases: a real move applying and conserving
 material with no claim mod/Dynamic Terrain installed (the "missing/unsupported integration"
 success case), a protected source, a protected destination, and a detected neighbor cave-in risk
 each denying (via injected orchestration-seam fakes), a REAL BlockEvent.BreakEvent listener
@@ -23,14 +23,17 @@ check that the real DynamicTerrainCaveInRisk reports no risk when Dynamic Terrai
 absent, a REAL BlockEvent.BreakEvent listener that swaps the source to a DIFFERENT but still
 smoothable state without cancelling (review 54910 -- a boolean-only canSmooth recheck cannot
 catch this; the production path must detect the exact state change and refuse to apply on top of
-it), per-tick dedup, a denied attempt and a failed roll each still consuming the dedup slot,
-no-valid-direction, an off-thread call denied before touching anything, an unloaded source
-denied without force-loading it, and a deterministic instrumented-seam test proving an unloaded
-destination is skipped before Smoothing/mutation ever runs for it. These replaced an earlier
-design (ErosionProtectionGate/ProtectionAdapter-routed checks) found three separate times to
-overclaim a capability it did not verify (review 54855/54861/54878/54890/54899/54901) --
-ClaimProtection and DynamicTerrainCaveInRisk are real, direct, unconditional checks instead.
-EXPECTED_REQUIRED_TEST_COUNT is that real count, 16 -- update it, never borrow a sibling mod's
+it), a REAL listener that swaps the support block for a different-but-sturdy one proving that
+harmless case still applies rather than being overcorrected into a denial (review 54915), a
+direct check that an unknown config lookup fails closed to the caller's fallback, per-tick
+dedup, a denied attempt and a failed roll each still consuming the dedup slot, no-valid-direction,
+an off-thread call denied before touching anything, an unloaded source denied without
+force-loading it, and a deterministic instrumented-seam test proving an unloaded destination is
+skipped before Smoothing/mutation ever runs for it. These replaced an earlier design
+(ErosionProtectionGate/ProtectionAdapter-routed checks) found three separate times to overclaim
+a capability it did not verify (review 54855/54861/54878/54890/54899/54901) -- ClaimProtection
+and DynamicTerrainCaveInRisk are real, direct, unconditional checks instead.
+EXPECTED_REQUIRED_TEST_COUNT is that real count, 18 -- update it, never borrow a sibling mod's
 count or test-name list, as more real GameTests are added.
 """
 import re
@@ -44,8 +47,8 @@ class RuntimeEvidenceError(ValueError):
 
 UNSET = "UNSET"
 
-# StandaloneBootGameTests (1) + ErosionAttemptGameTests (15), as of this slice.
-EXPECTED_REQUIRED_TEST_COUNT = 16
+# StandaloneBootGameTests (1) + ErosionAttemptGameTests (17), as of this slice.
+EXPECTED_REQUIRED_TEST_COUNT = 18
 
 
 def verify_runtime_log(log_text, expected=EXPECTED_REQUIRED_TEST_COUNT):

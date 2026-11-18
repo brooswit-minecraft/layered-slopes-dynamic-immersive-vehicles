@@ -527,4 +527,69 @@ public final class ErosionAttemptGameTests {
                 "the listener's own substituted state must be preserved untouched, not overwritten by a stale plan");
         helper.succeed();
     }
+
+    /**
+     * Regression (review 54915): the fix for 54910 must not overcorrect into denying a harmless
+     * change. A real {@code BlockEvent.BreakEvent} listener swaps the destination's SUPPORT
+     * block (never independently checked by this mod -- not source, not destination) for a
+     * DIFFERENT but still-sturdy block, without cancelling. {@code canSmooth} stays {@code true}
+     * (the swap does not break anchoring) and neither source nor destination's own state
+     * changes, so the move must still apply normally -- proving the source/destination
+     * equality check added for 54910 does not also deny this harmless case.
+     */
+    @GameTest(template = "flat_platform")
+    public static void aHarmlessSupportSubstitutionDoesNotPreventTheMoveFromApplying(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 2, 1);
+        BlockPos destPos = pos.relative(Direction.EAST);
+        BlockPos supportPos = destPos.below();
+        placeSourceWithOneValidEastNeighbor(helper, pos);
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos absolutePos = helper.absolutePos(pos);
+        BlockPos absoluteSupportPos = helper.absolutePos(supportPos);
+
+        Object swapSupportOnBreakEvent = new Object() {
+            @net.neoforged.bus.api.SubscribeEvent
+            public void onBreak(net.neoforged.neoforge.event.level.BlockEvent.BreakEvent event) {
+                if (event.getPos().equals(absolutePos)) {
+                    level.setBlock(absoluteSupportPos, Blocks.COBBLESTONE.defaultBlockState(), 3);
+                }
+            }
+        };
+        net.neoforged.neoforge.common.NeoForge.EVENT_BUS.register(swapSupportOnBreakEvent);
+        ErosionAttempt.Outcome outcome;
+        try {
+            outcome = ErosionAttempt.attempt(level, absolutePos,
+                    SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
+                    GUARANTEED_CHANCE_CONFIG, new ErosionDedup());
+        } finally {
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.unregister(swapSupportOnBreakEvent);
+        }
+
+        helper.assertTrue(outcome == ErosionAttempt.Outcome.APPLIED,
+                "a harmless support substitution (still sturdy, source/destination unchanged) must not prevent the move, got " + outcome);
+        helper.assertTrue(helper.getBlockState(pos).getBlock() == LayeredSlopesMod.LAYERED_DIRT.get(),
+                "the source cell must still have become LAYERED_DIRT");
+        helper.assertTrue(helper.getBlockState(supportPos).getBlock() == Blocks.COBBLESTONE,
+                "the listener's own support substitution must be preserved");
+        helper.succeed();
+    }
+
+    /**
+     * Regression (review 54915): a {@code DynamicTerrainCaveInRisk.readBooleanConfig} lookup for
+     * a modid with no registered config of the requested type must fail closed to the caller's
+     * supplied fallback, rather than silently proving safety from an absence of information.
+     * Performs no mutation and registers nothing (does not depend on Dynamic Terrain or any
+     * other real mod's config).
+     */
+    @GameTest(template = "flat_platform")
+    public static void unknownConfigFailsClosedToTheSuppliedFallback(GameTestHelper helper) {
+        boolean fallbackTrue = DynamicTerrainCaveInRisk.readBooleanConfig(
+                "no-such-mod-id-xyz", net.neoforged.fml.config.ModConfig.Type.SERVER, "someKey", true);
+        boolean fallbackFalse = DynamicTerrainCaveInRisk.readBooleanConfig(
+                "no-such-mod-id-xyz", net.neoforged.fml.config.ModConfig.Type.SERVER, "someKey", false);
+
+        helper.assertTrue(fallbackTrue, "an unknown config must return the caller's true fallback, not silently report safety");
+        helper.assertTrue(!fallbackFalse, "an unknown config must return the caller's false fallback unchanged");
+        helper.succeed();
+    }
 }

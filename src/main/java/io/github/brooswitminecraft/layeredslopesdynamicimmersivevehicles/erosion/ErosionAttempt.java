@@ -175,14 +175,19 @@ public final class ErosionAttempt {
                 anyCaveInRisk = true;
                 continue;
             }
-            // Re-verify feasibility AND exact state (review 54907/54908/54910): a claim-check
-            // listener could have mutated source, destination, or the (not independently visible
-            // to us) support block. canSmooth catches a support change (anchorSupported would now
-            // fail) and a material change at either end that makes the move infeasible; the
-            // explicit state-equality checks below additionally catch a swap to a DIFFERENT but
-            // still-smoothable configuration, which a boolean alone cannot distinguish from the
-            // original. Re-confirm loaded first, since a listener could also have unloaded either
-            // position (rare, but checked rather than assumed).
+            // Re-verify feasibility AND exact state (review 54907/54908/54910/54915): a
+            // claim-check listener could have mutated source, destination, or the (not
+            // independently visible to us) support block. canSmooth catches any change that
+            // flips the move's own feasibility verdict -- including a support-only change that
+            // breaks anchoring -- but NOT every support change: a support block swapped for a
+            // different, still-sturdy one leaves canSmooth true, and that IS harmless (grading's
+            // own fresh plan() re-derivation inside Smoothing.smooth() produces the identical
+            // result), so it correctly proceeds rather than being denied. The explicit
+            // source/destination state-equality checks below catch the real remaining gap: a
+            // listener swapping source or destination itself to a DIFFERENT configuration that
+            // is ALSO still smoothable, which canSmooth alone cannot distinguish from the
+            // original (review 54910's exact finding). Re-confirm loaded first, since a listener
+            // could also have unloaded either position (rare, but checked rather than assumed).
             if (!hooks.destinationLoaded.test(destination) || !level.hasChunkAt(pos)) {
                 continue;
             }
