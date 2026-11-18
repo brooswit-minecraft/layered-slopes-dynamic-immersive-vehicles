@@ -93,6 +93,20 @@ jobs:
             exit 1
           fi
 
+          # Place the known block and force the default-OFF erosion attempt NOW, before the
+          # client even starts. A prior run's logs proved a real sequencing bug: the client-side
+          # probe reads its fixed position, writes a result, and calls client.stop() entirely on
+          # its own schedule (after a fixed settle-tick countdown) -- it does not wait for any
+          # server-side setup. That run's "Dev joined the game"/"Dev lost connection" was only
+          # 6 seconds apart, and the setblock/erosionclientsynctest commands (sent only AFTER
+          # detecting the join) never even appear in that server log -- they lost the race
+          # entirely. Doing this before the client exists removes the race.
+          printf 'setblock 0 -59 0 minecraft:dirt\n' > server-side/stdin.pipe
+          sleep 1
+          printf 'erosionclientsynctest 0 -59 0 0 0\n' > server-side/stdin.pipe
+          sleep 1
+          tail -10 server-side/server-boot.log
+
           # Run our own Xvfb on a known, fixed display (rather than xvfb-run's auto-picked one)
           # so a screenshot/thread-dump tool can actually target it -- direction 55083's
           # instruction: capture real evidence (screenshot + JVM thread dump of the live client
@@ -150,11 +164,19 @@ jobs:
             grep -qE 'joined the game' server-side/server-boot.log 2>/dev/null && break
             sleep 7
           done
+          tail -10 server-side/server-boot.log
 
+          # The block/attempt setup already happened before the client ever started, so the
+          # only remaining real signal is the client's own probe result file -- written
+          # entirely on the client's own schedule once it reads the (already-final) block state.
           last_client_lines=0
           diagnostics_captured=false
+          found=false
           for i in $(seq 1 150); do
-            grep -qE 'joined the game' server-side/server-boot.log 2>/dev/null && break
+            if [ -s client-side/client-probe-result.txt ]; then
+              found=true
+              break
+            fi
             if [ $((i % 15)) -eq 0 ]; then
               current_lines=$(wc -l < client-side/client-boot.log)
               echo "diagnostic: $((i * 2))s elapsed, client-boot.log has $current_lines lines (was $last_client_lines 30s ago)"
@@ -174,32 +196,6 @@ jobs:
                 diagnostics_captured=true
               fi
               last_client_lines=$current_lines
-            fi
-            sleep 2
-          done
-          if ! grep -qE 'joined the game' server-side/server-boot.log; then
-            echo "::error::no player ever joined the server after 300s -- the headless client did not connect. Full client-boot.log:"
-            cat client-side/client-boot.log || true
-            kill -9 "$xvfb_pid" 2>/dev/null || true
-            exit 1
-          fi
-
-          # Move the just-joined player to a fixed, known absolute position so the harness never
-          # has to guess or parse vanilla's natural spawn-finding logic, then place a known block
-          # and force the default-OFF erosion attempt.
-          printf 'tp @a 0 -60.5 0\n' > server-side/stdin.pipe
-          sleep 2
-          printf 'setblock 0 -59 0 minecraft:dirt\n' > server-side/stdin.pipe
-          sleep 1
-          printf 'erosionclientsynctest 0 -59 0 0 0\n' > server-side/stdin.pipe
-          sleep 1
-          tail -40 server-side/server-boot.log
-
-          found=false
-          for i in $(seq 1 60); do
-            if [ -s client-side/client-probe-result.txt ]; then
-              found=true
-              break
             fi
             sleep 2
           done
