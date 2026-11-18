@@ -132,10 +132,14 @@ jobs:
             echo "::error::the server did not exit on its own within 30s of the real stdin 'stop' command -- this is not evidence of clean shutdown"
             exit 1
           fi
-          if ! grep -qE 'Stopping server|Saving worlds|All dimensions are saved' boot.log; then
-            echo "::error::expected the real vanilla/NeoForge graceful-shutdown log lines (Stopping server/Saving worlds/All dimensions are saved) -- not found"
-            exit 1
-          fi
+          # Review 55015's exact point: the original single-alternation grep passed when only
+          # ONE of the three markers was present. Require all three independently.
+          for marker in 'Stopping server' 'Saving worlds' 'All dimensions are saved'; do
+            if ! grep -qF "$marker" boot.log; then
+              echo "::error::expected the real vanilla/NeoForge graceful-shutdown log line '$marker' -- not found"
+              exit 1
+            fi
+          done
           config="config/layeredslopesdynamicimmersivevehicles-server.toml"
           if [ ! -f "$config" ]; then
             echo "::error::expected the real generated config file at $config -- it was never written"
@@ -240,10 +244,14 @@ jobs:
             echo "::error::the server did not exit on its own within 30s of the real stdin 'stop' command -- this is not evidence of clean shutdown"
             exit 1
           fi
-          if ! grep -qE 'Stopping server|Saving worlds|All dimensions are saved' boot.log; then
-            echo "::error::expected the real vanilla/NeoForge graceful-shutdown log lines (Stopping server/Saving worlds/All dimensions are saved) -- not found"
-            exit 1
-          fi
+          # Review 55015's exact point: the original single-alternation grep passed when only
+          # ONE of the three markers was present. Require all three independently.
+          for marker in 'Stopping server' 'Saving worlds' 'All dimensions are saved'; do
+            if ! grep -qF "$marker" boot.log; then
+              echo "::error::expected the real vanilla/NeoForge graceful-shutdown log line '$marker' -- not found"
+              exit 1
+            fi
+          done
           echo "confirmed: layered-slopes and layered-slope-grading boot successfully standalone, with no dependency on this compat mod, and shut down gracefully via a real stdin 'stop' command"
 
       - uses: actions/upload-artifact@v4
