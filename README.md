@@ -161,12 +161,23 @@ This is a bounded, multi-slice implementation. Current slice:
       (`compileOnly` stays on the normal, current, compatible jar, so main code still compiles).
 
       **Not yet covered, named explicitly rather than implied by the checkmarks above** (review
-      54978/54997): the eventual DIV dependency's own missing/incompatible case once it exists,
-      and base-mod isolation (this mod alone, with neither compat target installed).
+      54978/54997): the eventual DIV dependency's own missing/incompatible case once it exists.
+- [x] Pinned-jar smoke acceptance and base-mod isolation (direction, comment 54997/55004): an
+      opt-in `pinned-jar-smoke-acceptance.yml` workflow is the one place that boots the REAL
+      packaged artifact, not the dev-mode `gameTestServer` source-set classpath every other check
+      in this repo uses -- `./gradlew jar` builds this mod's actual distributable jar, a real
+      NeoForge-installer-produced dedicated-server distribution is installed (the same kind an
+      operator would actually run), and the real jars are dropped into its `mods/` folder.
+      `replacement-stack-smoke` boots this mod's packaged jar together with the pinned
+      `layered-slopes`/`layered-slope-grading` release jars, requiring the real `Done (` startup
+      line and all 3 expected mod ids in the real `Mod List`. `base-mods-isolation-smoke` boots
+      `layered-slopes`/`layered-slope-grading` ALONE, this mod's jar deliberately absent,
+      proving neither depends on this compat mod and both boot standalone with no mutual
+      linkage. No GameTests run in either job (a real production server has no GameTest
+      harness); success is the real startup/mod-list evidence, never a bare process exit code.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), multiplayer sync, base-mod-isolation dependency acceptance, pinned-jar smoke
-      acceptance, and gameplay acceptance evidence.
+      above), multiplayer sync, and gameplay acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 defaults to OFF via this mod's own real `erosionEnabled` server config (default `false`, see

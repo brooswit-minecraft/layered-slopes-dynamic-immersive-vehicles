@@ -1,0 +1,175 @@
+name: Pinned-jar smoke acceptance (opt-in)
+
+# Opt-in: never runs on an ordinary push, and only runs on a pull_request when THIS workflow
+# file itself changed, or build.gradle/gradle.properties (the pinned versions/sha512s) change.
+# Direction (comment 54997/55004): "prove base DIV and Layered Slopes boot without compat/no
+# mutual linkage, and prove replacement stack boots with packaged compat where applicable, not
+# just source-set dev classpath."
+#
+# Every other GameTest-based check in this repo (build/release-gate, dt-paired-runtime.yml,
+# dependency-failure-acceptance.yml, incompatible-version-acceptance.yml) boots via NeoForge's
+# moddev Gradle plugin's dev-mode gameTestServer run, which loads this mod straight off its
+# source-set classpath, never the actual packaged jar a real server would run. This workflow is
+# the one place that builds the REAL jar (`./gradlew jar`), installs a REAL, genuine,
+# NeoForge-installer-produced dedicated-server distribution (the same kind an actual operator
+# would download and run), and boots it with the real packaged jars dropped in `mods/` --
+# proving the whole distributable artifact works end to end, not just the dev harness.
+#
+# `replacement-stack-smoke`: this mod's own packaged jar + the pinned layered-slopes/
+# layered-slope-grading release jars together -- the "replacement stack."
+# `base-mods-isolation-smoke`: layered-slopes + layered-slope-grading ALONE, with this mod's jar
+# deliberately absent -- proving neither depends on this compat mod and both boot standalone.
+#
+# No GameTests run here at all (a real production server has no GameTest harness); success
+# evidence is the real "Done (" startup line plus the real Mod List naming exactly the expected
+# mod ids, the same discipline dependency-failure-acceptance.yml/incompatible-version-acceptance.yml
+# established: never trust a bare process exit code alone.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/pinned-jar-smoke-acceptance.yml'
+      - 'build.gradle'
+      - 'gradle.properties'
+
+permissions:
+  contents: read
+
+jobs:
+  replacement-stack-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Build this mod's real packaged jar, and download+verify the pinned base-mod jars
+        run: ./gradlew jar downloadLayeredSlopes downloadLayeredSlopeGrading --no-daemon
+
+      - name: Install a real NeoForge dedicated-server distribution
+        run: |
+          neo_version=$(grep '^neo_version=' gradle.properties | cut -d= -f2)
+          mkdir server && cd server
+          curl -sL -o installer.jar "https://maven.neoforged.net/releases/net/neoforged/neoforge/${neo_version}/neoforge-${neo_version}-installer.jar"
+          java -jar installer.jar --installServer
+          echo "eula=true" > eula.txt
+          mkdir mods
+
+      - name: Drop the real packaged mod jar and the pinned base-mod jars into mods/
+        run: |
+          mod_jar=$(ls build/libs/*.jar | head -1)
+          cp "$mod_jar" server/mods/
+          cp build/layeredslopes/*.jar server/mods/
+          cp build/layeredslopegrading/*.jar server/mods/
+          ls -la server/mods/
+
+      - name: Boot the real distribution with the real packaged replacement stack
+        working-directory: server
+        run: |
+          timeout 150 ./run.sh --nogui < /dev/null > boot.log 2>&1 &
+          boot_pid=$!
+          for i in $(seq 1 60); do
+            if grep -qE 'Done \(|FAILED TO START|ModLoadingException|Failed to start' boot.log 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          cat boot.log
+          pkill -9 -f 'unix_args' 2>/dev/null || true
+          wait "$boot_pid" 2>/dev/null || true
+
+      - name: Verify a real, successful boot naming exactly the expected mod ids
+        working-directory: server
+        run: |
+          if ! grep -q 'Done (' boot.log; then
+            echo "::error::expected a real 'Done (' startup line -- the server did not boot successfully"
+            exit 1
+          fi
+          for modid in '(layeredslopes)' '(layeredslopegrading)' '(layeredslopesdynamicimmersivevehicles)'; do
+            if ! grep -qF "$modid" boot.log; then
+              echo "::error::expected '$modid' in the real Mod List, not found"
+              exit 1
+            fi
+          done
+          echo "confirmed: the real packaged replacement stack booted successfully with all 3 expected mod ids"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replacement-stack-smoke-evidence
+          path: server/boot.log
+          if-no-files-found: warn
+
+  base-mods-isolation-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Download+verify the pinned base-mod jars (this mod's own jar is deliberately NOT built here)
+        run: ./gradlew downloadLayeredSlopes downloadLayeredSlopeGrading --no-daemon
+
+      - name: Install a real NeoForge dedicated-server distribution
+        run: |
+          neo_version=$(grep '^neo_version=' gradle.properties | cut -d= -f2)
+          mkdir server && cd server
+          curl -sL -o installer.jar "https://maven.neoforged.net/releases/net/neoforged/neoforge/${neo_version}/neoforge-${neo_version}-installer.jar"
+          java -jar installer.jar --installServer
+          echo "eula=true" > eula.txt
+          mkdir mods
+
+      - name: Drop ONLY the pinned base-mod jars into mods/ -- this compat mod is deliberately absent
+        run: |
+          cp build/layeredslopes/*.jar server/mods/
+          cp build/layeredslopegrading/*.jar server/mods/
+          ls -la server/mods/
+
+      - name: Boot the real distribution with ONLY the base mods, no compat mod at all
+        working-directory: server
+        run: |
+          timeout 150 ./run.sh --nogui < /dev/null > boot.log 2>&1 &
+          boot_pid=$!
+          for i in $(seq 1 60); do
+            if grep -qE 'Done \(|FAILED TO START|ModLoadingException|Failed to start' boot.log 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          cat boot.log
+          pkill -9 -f 'unix_args' 2>/dev/null || true
+          wait "$boot_pid" 2>/dev/null || true
+
+      - name: Verify a real, successful standalone boot with no mutual dependency on this compat mod
+        working-directory: server
+        run: |
+          if ! grep -q 'Done (' boot.log; then
+            echo "::error::expected a real 'Done (' startup line -- layered-slopes/layered-slope-grading did not boot standalone successfully"
+            exit 1
+          fi
+          for modid in '(layeredslopes)' '(layeredslopegrading)'; do
+            if ! grep -qF "$modid" boot.log; then
+              echo "::error::expected '$modid' in the real Mod List, not found"
+              exit 1
+            fi
+          done
+          if grep -qF '(layeredslopesdynamicimmersivevehicles)' boot.log; then
+            echo "::error::found this compat mod's own modid in the Mod List, but its jar was deliberately never placed in mods/ -- something is wrong with this job's isolation"
+            exit 1
+          fi
+          echo "confirmed: layered-slopes and layered-slope-grading boot successfully standalone, with no dependency on this compat mod"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: base-mods-isolation-smoke-evidence
+          path: server/boot.log
+          if-no-files-found: warn
