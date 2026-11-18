@@ -16,3 +16,9 @@ bump: minor
   blank/unset by default), letting a second client JVM join under a distinct identity instead of
   every dev client defaulting to the same account; every existing single-client workflow is
   unaffected.
+- Review fixes before the first real CI run: cumulative distinct "joined the game" log lines
+  alone only prove each identity connected at SOME point, not that both were concurrently
+  present at the single forced attempt -- both workflows now also issue a real `/list` command
+  immediately beforehand and assert its own response names both identities together. Also fixed
+  a `grep -c ... || echo 0` bug that printed two numbers (grep's own "0" plus the fallback's)
+  whenever no match was found, breaking the numeric comparison.

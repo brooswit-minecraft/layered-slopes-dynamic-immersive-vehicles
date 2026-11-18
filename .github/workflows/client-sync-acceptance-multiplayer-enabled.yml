@@ -171,11 +171,11 @@ jobs:
             sleep 1
             DISPLAY=:99 xdotool mouseup 1 2>>client-side-a/xdotool.log || true
             DISPLAY=:98 xdotool mouseup 1 2>>client-side-b/xdotool.log || true
-            joined_count=$(grep -cE 'joined the game' server-side/server-boot.log 2>/dev/null || echo 0)
+            joined_count=$(grep -cE 'joined the game' server-side/server-boot.log 2>/dev/null); joined_count=${joined_count:-0}
             [ "$joined_count" -ge 2 ] && break
             sleep 7
           done
-          joined_count=$(grep -cE 'joined the game' server-side/server-boot.log 2>/dev/null || echo 0)
+          joined_count=$(grep -cE 'joined the game' server-side/server-boot.log 2>/dev/null); joined_count=${joined_count:-0}
           if [ "$joined_count" -lt 2 ]; then
             echo "::error::expected two distinct players to join, only saw $joined_count -- see server-boot.log tail and both client-boot.logs:"
             tail -20 server-side/server-boot.log
@@ -215,6 +215,27 @@ jobs:
             kill -9 "$server_pid" "$client_a_pid" "$client_b_pid" "$xvfb_a_pid" "$xvfb_b_pid" 2>/dev/null || true
             exit 1
           fi
+
+          # Prove CONCURRENT presence of both distinct identities right at the moment of the
+          # attempt (review finding: cumulative distinct "joined the game" lines across the
+          # whole log only show each connected at SOME point, not that both were present
+          # together at this instant) via the server's own real /list response.
+          printf 'list\n' > server-side/stdin.pipe
+          sleep 2
+          list_line=$(grep 'There are' server-side/server-boot.log | tail -1)
+          echo "pre-attempt /list: $list_line"
+          list_names=$(echo "$list_line" | sed -E 's/.*online: ?//' | tr -d ' ')
+          if ! printf ',%s,' "$list_names" | grep -qF ',Dev,'; then
+            echo "::error::pre-attempt /list did not show Dev concurrently connected: '$list_line'"
+            kill -9 "$server_pid" "$client_a_pid" "$client_b_pid" "$xvfb_a_pid" "$xvfb_b_pid" 2>/dev/null || true
+            exit 1
+          fi
+          if ! printf ',%s,' "$list_names" | grep -qF ',DevSecond,'; then
+            echo "::error::pre-attempt /list did not show DevSecond concurrently connected: '$list_line'"
+            kill -9 "$server_pid" "$client_a_pid" "$client_b_pid" "$xvfb_a_pid" "$xvfb_b_pid" 2>/dev/null || true
+            exit 1
+          fi
+          echo "verified: both Dev and DevSecond concurrently present per real server /list output immediately before the single forced attempt"
 
           # A single forced attempt -- both already-connected, already-watching clients must
           # independently observe its result.
