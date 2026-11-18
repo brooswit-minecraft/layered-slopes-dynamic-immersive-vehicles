@@ -122,23 +122,34 @@ jobs:
           # Dismiss it with a real simulated click at its "Continue" button (known, fixed
           # coordinates at our fixed 1280x720 resolution), the equivalent of that one-time human
           # acknowledgment, not fabricated evidence.
-          sleep 25
-          # A second run's screenshot showed the Continue button correctly highlighted after
-          # the mousemove (proof the synthetic mouse-move was received), but the dialog was
-          # still showing -- the combined "click 1" press+release didn't register as an actual
-          # activation. Explicitly focus the window first (no window manager is running under
-          # bare Xvfb, so a window may not have focus by default) and send mousedown/mouseup as
-          # separate events with a short delay between them.
-          DISPLAY=:99 xdotool search --name "Minecraft" windowactivate --sync 2>client-side/xdotool.log || true
-          DISPLAY=:99 xdotool mousemove 638 567 2>>client-side/xdotool.log || true
-          sleep 1
-          DISPLAY=:99 xdotool mousedown 1 2>>client-side/xdotool.log || true
-          sleep 1
-          DISPLAY=:99 xdotool mouseup 1 2>>client-side/xdotool.log || true
-          sleep 3
-          xwd -root -display :99 -out /tmp/post-click-screen.xwd 2>>client-side/xwd.log \
-            && convert /tmp/post-click-screen.xwd client-side/post-click-screenshot.png 2>>client-side/xwd.log \
-            || true
+          #
+          # A fixed `sleep 25` before the first click attempt proved mistimed on a run where
+          # boot was slower -- the post-click screenshot showed the EARLY mod-loading splash
+          # screen still up, not yet the dialog, so that click landed on nothing. Instead, wait
+          # for the real "Loaded 0 entity animations" log line (the last line ever observed
+          # before the dialog appears in every run so far), then retry the click a few times
+          # with a delay -- a click on the harmless mod-loading splash does nothing, so retrying
+          # is safe, and this tolerates run-to-run boot-time variance without guessing a fixed
+          # sleep. No window manager runs under bare Xvfb (confirmed: windowactivate's
+          # _NET_ACTIVE_WINDOW attempt errors, harmlessly, every time) so mousedown/mouseup are
+          # sent directly without relying on window focus.
+          for i in $(seq 1 30); do
+            grep -qF 'Loaded 0 entity animations' client-side/client-boot.log 2>/dev/null && break
+            sleep 2
+          done
+          for attempt in 1 2 3 4 5 6; do
+            DISPLAY=:99 xdotool mousemove 638 567 2>>client-side/xdotool.log || true
+            sleep 1
+            DISPLAY=:99 xdotool mousedown 1 2>>client-side/xdotool.log || true
+            sleep 1
+            DISPLAY=:99 xdotool mouseup 1 2>>client-side/xdotool.log || true
+            sleep 3
+            xwd -root -display :99 -out /tmp/post-click-screen.xwd 2>>client-side/xwd.log \
+              && convert /tmp/post-click-screen.xwd "client-side/post-click-screenshot-attempt${attempt}.png" 2>>client-side/xwd.log \
+              || true
+            grep -qE 'joined the game' server-side/server-boot.log 2>/dev/null && break
+            sleep 7
+          done
 
           last_client_lines=0
           diagnostics_captured=false
@@ -232,7 +243,7 @@ jobs:
             client-side/client-boot.log
             client-side/client-probe-result.txt
             client-side/client-screenshot.png
-            client-side/post-click-screenshot.png
+            client-side/post-click-screenshot-attempt*.png
             client-side/client-thread-dump.txt
             client-side/xwd.log
             client-side/xdotool.log
