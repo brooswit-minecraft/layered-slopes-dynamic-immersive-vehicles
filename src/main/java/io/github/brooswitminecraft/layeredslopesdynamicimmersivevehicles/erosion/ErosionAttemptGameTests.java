@@ -290,12 +290,22 @@ public final class ErosionAttemptGameTests {
                 offThreadError.set(t);
             }
         });
+        // Bounded wait (review 54883): if the OFF_THREAD guard ever regressed and the worker
+        // blocked on a server-scheduled chunk/dedup operation instead of returning immediately,
+        // an unbounded join() would hang the whole test run instead of failing it cleanly.
+        long joinTimeoutMs = 5_000L;
+        thread.setDaemon(true);
         thread.start();
         try {
-            thread.join();
+            thread.join(joinTimeoutMs);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             helper.fail("interrupted while waiting for the off-thread call");
+            return;
+        }
+        if (thread.isAlive()) {
+            helper.fail("the off-thread call did not return within " + joinTimeoutMs
+                    + "ms -- the OFF_THREAD guard may have regressed into blocking on server state instead of denying immediately");
             return;
         }
 
@@ -334,6 +344,50 @@ public final class ErosionAttemptGameTests {
         helper.assertTrue(outcome == ErosionAttempt.Outcome.SOURCE_NOT_LOADED, "expected SOURCE_NOT_LOADED, got " + outcome);
         helper.assertTrue(!level.hasChunkAt(farAwayPos), "the call must not have force-loaded the chunk as a side effect");
         helper.assertTrue(dedup.claimedCountForCurrentTick() == 0, "an unloaded source must not consume a dedup slot");
+        helper.succeed();
+    }
+
+    /**
+     * Regression (review 54883): the earlier "destination not loaded" coverage only reasoned
+     * about code symmetry (the same {@code hasChunkAt} expression guards both source and
+     * destination) without a direct test proving the destination branch is actually ordered
+     * before {@code canSmooth}. This test constructs a real loaded-source/unloaded-destination
+     * chunk boundary directly via raw world coordinates (bypassing the GameTest structure, whose
+     * whole bounding box is loaded as one unit): {@code sourcePos} sits at local x=15 of its
+     * chunk, so its EAST neighbour is the first position in the next chunk over, which is never
+     * touched and so never force-loaded.
+     */
+    @GameTest(template = "flat_platform")
+    public static void anUnloadedDestinationIsSkippedWithoutForceLoadingItEvenWithALoadedSource(GameTestHelper helper) {
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos sourcePos = new BlockPos(2_000_015, 64, 2_000_008); // local x=15: EAST crosses a chunk boundary
+        // Flag 0 (no neighbor/client updates): setBlockAndUpdate's UPDATE_ALL triggers
+        // shape/lighting recalculation that can force-load the adjacent chunk across the
+        // boundary this test deliberately needs to stay unloaded -- confirmed empirically (first
+        // attempt at this test failed its own "must start unloaded" precondition for exactly
+        // that reason).
+        level.setBlock(sourcePos, Blocks.DIRT.defaultBlockState(), 0);
+        // WEST/NORTH/SOUTH stay within source's own (now loaded) chunk; block them so EAST -- the
+        // one direction whose destination chunk is deliberately left untouched -- is the only
+        // direction that could otherwise succeed.
+        level.setBlock(sourcePos.relative(Direction.WEST), Blocks.STONE.defaultBlockState(), 0);
+        level.setBlock(sourcePos.relative(Direction.NORTH), Blocks.STONE.defaultBlockState(), 0);
+        level.setBlock(sourcePos.relative(Direction.SOUTH), Blocks.STONE.defaultBlockState(), 0);
+        BlockPos eastDestination = sourcePos.relative(Direction.EAST);
+
+        helper.assertTrue(level.hasChunkAt(sourcePos), "test precondition: the source chunk must be loaded");
+        helper.assertTrue(!level.hasChunkAt(eastDestination), "test precondition: the EAST neighbour chunk must start unloaded");
+
+        ErosionProtectionGate gate = new ErosionProtectionGate();
+        gate.assertCoverage(grantingAdapter());
+        ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(level, sourcePos,
+                SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
+                GUARANTEED_CHANCE_CONFIG, new ErosionDedup(), gate, true);
+
+        helper.assertTrue(outcome == ErosionAttempt.Outcome.NO_VALID_DIRECTION,
+                "expected NO_VALID_DIRECTION (the only unblocked direction's chunk is unloaded, so it must be skipped), got " + outcome);
+        helper.assertTrue(!level.hasChunkAt(eastDestination),
+                "the call must not have force-loaded the unloaded EAST destination chunk as a side effect");
         helper.succeed();
     }
 }
