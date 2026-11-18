@@ -182,10 +182,17 @@ This is a bounded, multi-slice implementation. Current slice:
       actually happen, the same way the Dynamic Terrain probe above confirmed NeoForge's own
       config-reload behavior), with the production path transitioning `DISABLED` -> `APPLIED`
       accordingly.
+- [x] Dependency-failure acceptance (direction, comment 54973): an opt-in
+      `dependency-failure-acceptance.yml` workflow proves NeoForge's own mandatory-dependency
+      check actually refuses to boot, with a meaningful message naming the specific missing mod,
+      when `layered-slopes` or `layered-slope-grading` is absent at runtime -- not merely that
+      some process exits nonzero. `build.gradle`'s `-PomitRequiredDependency=<modid>` flag skips
+      only that jar's `runtimeOnly` entry (`compileOnly` stays, so main code still compiles);
+      `neoforge.mods.toml`'s own `type="required"` declaration for that modId is untouched, so
+      the dependency is genuinely, verifiably unmet, never simulated.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), multiplayer sync, dependency-failure tests, pinned-jar smoke acceptance, and
-      gameplay acceptance evidence.
+      above), multiplayer sync, pinned-jar smoke acceptance, and gameplay acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 defaults to OFF via this mod's own real `erosionEnabled` server config (default `false`, see
