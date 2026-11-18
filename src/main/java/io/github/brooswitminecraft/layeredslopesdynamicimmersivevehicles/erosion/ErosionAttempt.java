@@ -159,6 +159,14 @@ public final class ErosionAttempt {
             if (!hooks.canSmooth.canSmooth(level, pos, direction)) {
                 continue;
             }
+            // Captured immediately before the claim checks below, which run real synchronous
+            // NeoForge listeners that can mutate the world as a side effect (review 54910): a
+            // listener could swap source/destination/support to a DIFFERENT configuration that
+            // is ALSO still smoothable, which a boolean-only canSmooth recheck cannot detect --
+            // Smoothing.smooth()'s own TOCTOU fix only protects its OWN authorization event, not
+            // ours, since it (re-)derives its plan strictly after these claim checks already ran.
+            BlockState sourceBeforeClaimChecks = level.getBlockState(pos);
+            BlockState destinationBeforeClaimChecks = level.getBlockState(destination);
             if (!hooks.claim.mayMutate(level, pos) || !hooks.claim.mayMutate(level, destination)) {
                 anyProtected = true;
                 continue;
@@ -167,13 +175,22 @@ public final class ErosionAttempt {
                 anyCaveInRisk = true;
                 continue;
             }
-            // Re-verify feasibility (review 54907/54908): claim.mayMutate above can run a
-            // synchronous NeoForge listener that mutates the world as a side effect. Smoothing.
-            // smooth() re-derives and compares its own plan before applying (grading's own TOCTOU
-            // fix), so it cannot apply a stale plan -- but re-checking here too means a listener
-            // that invalidated this exact candidate is treated as "try the next direction"
-            // rather than silently falling through to smooth() returning false.
+            // Re-verify feasibility AND exact state (review 54907/54908/54910): a claim-check
+            // listener could have mutated source, destination, or the (not independently visible
+            // to us) support block. canSmooth catches a support change (anchorSupported would now
+            // fail) and a material change at either end that makes the move infeasible; the
+            // explicit state-equality checks below additionally catch a swap to a DIFFERENT but
+            // still-smoothable configuration, which a boolean alone cannot distinguish from the
+            // original. Re-confirm loaded first, since a listener could also have unloaded either
+            // position (rare, but checked rather than assumed).
+            if (!hooks.destinationLoaded.test(destination) || !level.hasChunkAt(pos)) {
+                continue;
+            }
             if (!hooks.canSmooth.canSmooth(level, pos, direction)) {
+                continue;
+            }
+            if (!level.getBlockState(pos).equals(sourceBeforeClaimChecks)
+                    || !level.getBlockState(destination).equals(destinationBeforeClaimChecks)) {
                 continue;
             }
             if (Smoothing.smooth(level, pos, direction, true)) {

@@ -15,8 +15,19 @@ bump: minor
   all, deny every attempt (reads only its mod id as data, never its Java classes).
 - `ErosionAttempt` now enforces both checks as mandatory, unconditional steps before any
   `Smoothing.smooth()` call -- not behind an optional, separately-installed adapter -- plus a
-  final re-verification of `canSmooth` immediately before applying, since a synchronous
-  `ClaimProtection` listener can mutate the world as a side effect of its own check.
+  final re-verification immediately before applying: `canSmooth` AND an exact source/destination
+  `BlockState` equality check against the states captured just before the claim checks (review
+  54910 -- a `ClaimProtection` listener runs real synchronous NeoForge event handlers that can
+  mutate the world as a side effect, and a boolean-only `canSmooth` recheck cannot tell the
+  original configuration apart from a DIFFERENT one that happens to still be smoothable).
+
+### Known limitation
+- Dynamic Terrain coexistence (review 54910): `DynamicTerrainCaveInRisk` denies every attempt
+  whenever Dynamic Terrain is loaded at all, with no partial/opt-in coexistence. A finite
+  supported policy would require replicating DT's own recursive `SupportSearch`-based
+  connectivity check (bounded to 256 visited cells) to prove a specific move cannot destabilize
+  a reachable DT-tagged block -- a substantial, independent reimplementation not attempted in
+  this slice. Flagged explicitly as an open product question, not claimed as resolved.
 
 ### Changed
 - Withdrew the `ErosionProtectionGate`/`ProtectionAdapter`-routed design from `ErosionAttempt`'s

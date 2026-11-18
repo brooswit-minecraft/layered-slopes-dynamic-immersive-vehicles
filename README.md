@@ -73,32 +73,50 @@ This is a bounded, multi-slice implementation. Current slice:
         loaded at all, every attempt is denied (reads only DT's mod id as data, never its Java
         classes, the same optional-dependency shape `GroundSurfaces.java` already uses for Layered
         Slopes). If DT is not loaded, there is no such risk.
+
+        **Known product limitation (review 54910):** this means a world running Dynamic Terrain
+        alongside this mod gets no usable erosion at all, not partial/opt-in coexistence. Building
+        a finite supported policy would require replicating DT's own recursive
+        `SupportSearch`-based connectivity check (`CaveIns.java`/`SupportSearch.java`, bounded to
+        256 visited cells) to prove a specific move cannot destabilize a reachable DT-tagged
+        block -- a substantial, independent reimplementation this slice does not attempt, rather
+        than guess at a narrower rule not actually verified against that algorithm. Until that
+        exists (or DT's own cave-ins are otherwise confirmed inert for a given world), unconditional
+        refusal under Dynamic Terrain is the deliberate, conservative behavior -- flagged
+        explicitly as an open product question, not claimed as resolved coexistence.
       `ErosionAttempt`'s production path is: dedup claim, the accepted MINECRAFT-555
       slip-to-probability roll, a shuffled-direction-first-`canSmooth`-accepted candidate, both
-      real checks above at that candidate's source and destination, a re-verified `canSmooth`
-      (a synchronous `ClaimProtection` listener could have mutated the world as a side effect;
-      `Smoothing.smooth()` itself also re-derives and compares its own plan before applying, per
-      grading's existing TOCTOU fix, so this is defense in depth, not the only safety net), then
-      `Smoothing.smooth()`. Takes a `ServerLevel` (a client-side call cannot even be constructed)
-      and asserts `level.getServer().isSameThread()` before touching anything -- the type alone
-      does not rule out an off-thread call. Derives dimension/tick from the level/its server,
-      never from a caller-supplied value; every candidate position's chunk is confirmed loaded
-      before any block query, never force-loading one. Takes slip/load telemetry as plain
-      parameters; makes no assumption about where it comes from, since DIV's own per-wheel
-      contact-telemetry seam is not wired in yet (see below). `ErosionAttemptGameTests` (14 cases)
-      prove this against a real world: a real move applying and conserving material with no
-      claim mod/Dynamic Terrain installed (the "missing/unsupported integration" success case), a
-      protected source, a protected destination, and a detected cave-in risk each denying (via
-      injected orchestration-seam fakes), a REAL `BlockEvent.BreakEvent` listener cancelling at
-      source and at destination each denying via the actual production path, a direct check that
-      the real `DynamicTerrainCaveInRisk` reports no risk when Dynamic Terrain is genuinely
-      absent, per-tick dedup, a denied attempt and a failed roll each still consuming the dedup
-      slot, no-valid-direction, an off-thread call denied (bounded join with safe worker
-      interrupt/cleanup on timeout) before touching anything, an unloaded source denied without
-      force-loading it, and a deterministic instrumented-seam test proving `Smoothing.canSmooth`
-      itself is never even queried for an unloaded destination -- not just "no mutation
-      happened," which a reordered implementation could still satisfy; verified by temporarily
-      reordering the production check, confirming the test fails, then reverting.
+      real checks above at that candidate's source and destination, then a re-verification before
+      applying: a synchronous `ClaimProtection` listener runs real NeoForge event handlers that
+      could mutate the world as a side effect, and a boolean-only `canSmooth` recheck cannot tell
+      the original configuration apart from a DIFFERENT one a listener swapped in that happens to
+      still be smoothable (review 54910) -- so this re-verifies `canSmooth` AND compares the exact
+      source/destination `BlockState`s captured just before the claim checks, failing closed on
+      any difference. `Smoothing.smooth()` itself also re-derives and compares its own plan before
+      applying (grading's existing TOCTOU fix), covering its own authorization event; this is
+      additional, earlier defense in depth, not a replacement for it. Takes a `ServerLevel` (a
+      client-side call cannot even be constructed) and asserts `level.getServer().isSameThread()`
+      before touching anything -- the type alone does not rule out an off-thread call. Derives
+      dimension/tick from the level/its server, never from a caller-supplied value; every
+      candidate position's chunk is confirmed loaded before any block query, never force-loading
+      one. Takes slip/load telemetry as plain parameters; makes no assumption about where it comes
+      from, since DIV's own per-wheel contact-telemetry seam is not wired in yet (see below).
+      `ErosionAttemptGameTests` (15 cases) prove this against a real world: a real move applying
+      and conserving material with no claim mod/Dynamic Terrain installed (the
+      "missing/unsupported integration" success case), a protected source, a protected
+      destination, and a detected cave-in risk each denying (via injected orchestration-seam
+      fakes), a REAL `BlockEvent.BreakEvent` listener cancelling at source and at destination
+      each denying via the actual production path, a direct check that the real
+      `DynamicTerrainCaveInRisk` reports no risk when Dynamic Terrain is genuinely absent, a REAL
+      `BlockEvent.BreakEvent` listener that swaps the source to a DIFFERENT but still-smoothable
+      state without cancelling (proving the exact-state recheck catches what a boolean-only
+      recheck cannot), per-tick dedup, a denied attempt and a failed roll each still consuming
+      the dedup slot, no-valid-direction, an off-thread call denied (bounded join with safe
+      worker interrupt/cleanup on timeout) before touching anything, an unloaded source denied
+      without force-loading it, and a deterministic instrumented-seam test proving
+      `Smoothing.canSmooth` itself is never even queried for an unloaded destination -- not just
+      "no mutation happened," which a reordered implementation could still satisfy; verified by
+      temporarily reordering the production check, confirming the test fails, then reverting.
 - [x] `ErosionProtectionGate`/`ProtectionAdapter` (merged PR #3) remains in the codebase, valid on
       its own terms, but is no longer part of `ErosionAttempt`'s real path for the reason above --
       its Minecraft-free abstraction cannot host a real world-aware check.
@@ -127,7 +145,7 @@ they are plain JUnit 5 tests with no Minecraft/NeoForge dependency.
 ```
 
 Boots a real dedicated server with this mod, `layered-slopes`, and `layered-slope-grading`
-installed and runs the 15 GameTests (boot-only, plus `ErosionAttemptGameTests`' 14 real-world
+installed and runs the 16 GameTests (boot-only, plus `ErosionAttemptGameTests`' 15 real-world
 orchestration cases). Wired into CI via `scripts/check_gametest_count.py`, which fails closed if
 the expected test count regresses. An opt-in `div-paired-runtime.yml` workflow additionally
 builds DIV fresh and boots everything together at DIV's real NeoForge floor.

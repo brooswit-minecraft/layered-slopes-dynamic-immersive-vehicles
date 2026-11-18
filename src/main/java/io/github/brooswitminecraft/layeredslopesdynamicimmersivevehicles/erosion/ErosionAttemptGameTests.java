@@ -1,6 +1,7 @@
 package io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion;
 
 import io.github.brooswitminecraft.layeredslopegrading.Smoothing;
+import io.github.brooswitminecraft.layeredslopes.Anchor;
 import io.github.brooswitminecraft.layeredslopes.LayeredBlock;
 import io.github.brooswitminecraft.layeredslopes.LayeredSlopesMod;
 import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.LayeredSlopesDynamicImmersiveVehiclesMod;
@@ -479,6 +480,51 @@ public final class ErosionAttemptGameTests {
         boolean risk = DynamicTerrainCaveInRisk.isPresent(level, absolutePos, absolutePos.relative(Direction.EAST));
 
         helper.assertTrue(!risk, "Dynamic Terrain is not part of this test environment's mod list, so there must be no reported risk");
+        helper.succeed();
+    }
+
+    /**
+     * Regression (review 54910): a boolean-only {@code canSmooth} recheck cannot distinguish the
+     * original configuration from a DIFFERENT one a listener swapped in that happens to still be
+     * smoothable. A real {@code BlockEvent.BreakEvent} listener (fired by {@link ClaimProtection}
+     * for the source position) replaces the source with a different, but still valid and
+     * smoothable, {@code LAYERED_DIRT} state (5 layers instead of a full 16-layer-equivalent
+     * dirt block) without cancelling the event. The production path must detect this exact-state
+     * change and refuse to apply {@code Smoothing.smooth()} on top of it, preserving the
+     * listener's own substituted state untouched.
+     */
+    @GameTest(template = "flat_platform")
+    public static void aListenerSwappingSourceToADifferentStillSmoothableStateIsNotSilentlyAppliedOnTopOf(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 2, 1);
+        placeSourceWithOneValidEastNeighbor(helper, pos);
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos absolutePos = helper.absolutePos(pos);
+        BlockState swappedState = LayeredSlopesMod.LAYERED_DIRT.get().defaultBlockState()
+                .setValue(LayeredBlock.LAYERS, 5)
+                .setValue(LayeredBlock.ANCHOR, Anchor.FLOOR);
+
+        Object swapSourceOnBreakEvent = new Object() {
+            @net.neoforged.bus.api.SubscribeEvent
+            public void onBreak(net.neoforged.neoforge.event.level.BlockEvent.BreakEvent event) {
+                if (event.getPos().equals(absolutePos)) {
+                    level.setBlock(absolutePos, swappedState, 3);
+                }
+            }
+        };
+        net.neoforged.neoforge.common.NeoForge.EVENT_BUS.register(swapSourceOnBreakEvent);
+        ErosionAttempt.Outcome outcome;
+        try {
+            outcome = ErosionAttempt.attempt(level, absolutePos,
+                    SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
+                    GUARANTEED_CHANCE_CONFIG, new ErosionDedup());
+        } finally {
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.unregister(swapSourceOnBreakEvent);
+        }
+
+        helper.assertTrue(outcome != ErosionAttempt.Outcome.APPLIED,
+                "a source swapped to a different state during the claim check must never be smoothed on top of, got " + outcome);
+        helper.assertTrue(helper.getBlockState(pos).equals(swappedState),
+                "the listener's own substituted state must be preserved untouched, not overwritten by a stale plan");
         helper.succeed();
     }
 }
