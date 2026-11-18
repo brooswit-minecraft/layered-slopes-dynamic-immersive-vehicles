@@ -147,13 +147,16 @@ public final class DynamicTerrainPairedGameTests {
      * changes." This test only runs in the {@code caveInsEnabled=false}-boot scenario (the other
      * boot has nothing to transition FROM); the workflow runs it exactly once.
      *
-     * <p>Reverts the file and polls the value back to {@code false} before returning (success or
-     * failure), since {@code DynamicTerrainConfig.CAVE_INS_ENABLED} is static, process-wide
-     * state shared with every other {@code @GameTest} method in this same server run, and
-     * NeoForge's own batch execution order between methods is not something this test can rely
-     * on -- an earlier version of this test left the value mutated and intermittently broke
-     * {@code productionPathMatchesDynamicTerrainsRealCaveInsEnabledConfig} depending on run
-     * order, caught by running this suite locally before relying on it in CI.
+     * <p>Reverts the file and REQUIRES the value to actually be observed back at {@code false}
+     * before returning, since {@code DynamicTerrainConfig.CAVE_INS_ENABLED} is static,
+     * process-wide state shared with every other {@code @GameTest} method in this same server
+     * run, and NeoForge's own batch execution order between methods is not something this test
+     * can rely on. Review 54931 found an earlier version of this cleanup discarded
+     * {@code pollForValue}'s result instead of asserting it -- so the test could pass while the
+     * reset silently failed, leaving the static value (and the on-disk file) mutated for later
+     * {@code @GameTest} methods, with the documented isolation guarantee unverified. The cleanup
+     * failure is attached as a suppressed exception rather than replacing a real assertion
+     * failure from the body above, so neither failure masks the other.
      */
     @GameTest(template = "flat_platform")
     public static void liveConfigFileEditIsObservedWithoutARestartOrElseThisFailsExplicitly(GameTestHelper helper) {
@@ -178,6 +181,7 @@ public final class DynamicTerrainPairedGameTests {
         rewriteConfigFile(true);
         boolean observedFlipToTrue = pollForValue(true, 5);
 
+        Throwable primaryFailure = null;
         try {
             helper.assertTrue(observedFlipToTrue,
                     "Dynamic Terrain's own caveInsEnabled BooleanValue did NOT flip to true within 5s "
@@ -197,9 +201,34 @@ public final class DynamicTerrainPairedGameTests {
             helper.assertTrue(genericReadAfter,
                     "after the observed live reload, this mod's generic reader should also observe true, got "
                             + genericReadAfter);
+        } catch (Throwable t) {
+            primaryFailure = t;
+            throw t;
         } finally {
             rewriteConfigFile(false);
-            pollForValue(false, 5);
+            boolean observedRevertToFalse = pollForValue(false, 5);
+            String onDiskAfterRevert;
+            try {
+                onDiskAfterRevert = Files.readString(DYNAMIC_TERRAIN_CONFIG_PATH, StandardCharsets.UTF_8)
+                        .lines()
+                        .filter(line -> line.startsWith(CAVE_INS_ENABLED_KEY))
+                        .findFirst().orElse("<missing>");
+            } catch (java.io.IOException e) {
+                onDiskAfterRevert = "<unreadable: " + e + ">";
+            }
+            boolean onDiskReflectsFalse = onDiskAfterRevert.contains("false");
+            if (!observedRevertToFalse || !onDiskReflectsFalse) {
+                AssertionError cleanupFailure = new AssertionError(
+                        "cleanup failed: Dynamic Terrain's own caveInsEnabled BooleanValue did not "
+                                + "revert to false (observed=" + observedRevertToFalse + ") and/or the "
+                                + "on-disk file does not reflect it (" + onDiskAfterRevert + ") -- this "
+                                + "static state would leak into later @GameTest methods in this run");
+                if (primaryFailure != null) {
+                    primaryFailure.addSuppressed(cleanupFailure);
+                } else {
+                    throw cleanupFailure;
+                }
+            }
         }
 
         helper.succeed();
