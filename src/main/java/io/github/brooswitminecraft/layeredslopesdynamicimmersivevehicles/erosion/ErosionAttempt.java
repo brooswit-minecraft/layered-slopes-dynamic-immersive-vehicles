@@ -2,6 +2,7 @@ package io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosio
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 
 import io.github.brooswitminecraft.layeredslopegrading.Smoothing;
 
@@ -62,7 +63,7 @@ public final class ErosionAttempt {
     public static Outcome attempt(ServerLevel level, BlockPos pos, double slipSpeedMs, double wheelLoadKg,
                                    RandomSource random, ErosionConfig config, ErosionDedup dedup,
                                    ErosionProtectionGate gate) {
-        return attempt(level, pos, slipSpeedMs, wheelLoadKg, random, config, dedup, gate, false);
+        return attempt(level, pos, slipSpeedMs, wheelLoadKg, random, config, dedup, gate, false, level::hasChunkAt);
     }
 
     /**
@@ -75,6 +76,23 @@ public final class ErosionAttempt {
     static Outcome attempt(ServerLevel level, BlockPos pos, double slipSpeedMs, double wheelLoadKg,
                             RandomSource random, ErosionConfig config, ErosionDedup dedup,
                             ErosionProtectionGate gate, boolean propagationScopeKnownForTest) {
+        return attempt(level, pos, slipSpeedMs, wheelLoadKg, random, config, dedup, gate,
+                propagationScopeKnownForTest, level::hasChunkAt);
+    }
+
+    /**
+     * Package-only instrumented seam (review 54884/54886/54888): {@code destinationLoadedCheck}
+     * lets a test deterministically fake a specific destination as unloaded, proving the
+     * candidate is skipped before {@code Smoothing}/protection/mutation ever run for it --
+     * without depending on real chunk-loading behavior, which proved to differ between
+     * environments in an earlier, reverted attempt at this same regression. Production always
+     * passes the real {@code level::hasChunkAt} via the two overloads above; this one is never
+     * called from production code.
+     */
+    static Outcome attempt(ServerLevel level, BlockPos pos, double slipSpeedMs, double wheelLoadKg,
+                            RandomSource random, ErosionConfig config, ErosionDedup dedup,
+                            ErosionProtectionGate gate, boolean propagationScopeKnownForTest,
+                            Predicate<BlockPos> destinationLoadedCheck) {
         if (!level.getServer().isSameThread()) {
             return Outcome.OFF_THREAD;
         }
@@ -104,7 +122,7 @@ public final class ErosionAttempt {
             // The anchor-support block Smoothing/SmoothRules checks is always destination's
             // vertical neighbour -- same chunk column as destination, since chunks span full
             // world height -- so confirming destination's chunk is loaded covers it too.
-            if (!level.hasChunkAt(destination)) {
+            if (!destinationLoadedCheck.test(destination)) {
                 continue;
             }
             if (!Smoothing.canSmooth(level, pos, direction)) {

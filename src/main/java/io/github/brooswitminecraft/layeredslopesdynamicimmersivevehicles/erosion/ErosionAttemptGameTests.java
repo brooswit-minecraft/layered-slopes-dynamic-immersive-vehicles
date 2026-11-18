@@ -304,6 +304,15 @@ public final class ErosionAttemptGameTests {
             return;
         }
         if (thread.isAlive()) {
+            // Safe cleanup (review 54884): don't leave a live worker behind just because this
+            // assertion is about to fail -- interrupt it and give it a moment to actually exit
+            // before reporting the failure.
+            thread.interrupt();
+            try {
+                thread.join(1_000L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             helper.fail("the off-thread call did not return within " + joinTimeoutMs
                     + "ms -- the OFF_THREAD guard may have regressed into blocking on server state instead of denying immediately");
             return;
@@ -352,9 +361,42 @@ public final class ErosionAttemptGameTests {
     // destination chunk it depended on staying unloaded was NOT unloaded, failing its own
     // precondition, while the identical test passed repeatedly on this local sandbox. Rather than
     // ship a test whose outcome depends on chunk-loading behavior that differs between
-    // environments for reasons not fully diagnosed, it was reverted. The destination guard
-    // remains the identical `hasChunkAt` check at the identical call shape as the source guard
-    // tested above; a more robust way to directly prove the destination branch's ordering would
-    // be extracting the loaded-check into a seam that can be driven with a controllable fake
-    // rather than real chunk state -- flagged as follow-up, not attempted here.
+    // environments for reasons not fully diagnosed, it was reverted in favor of the deterministic
+    // instrumented-seam test below (review 54884/54886/54888).
+
+    /**
+     * Regression (review 54884/54886/54888): proves the destination-loaded check is ordered
+     * before {@code Smoothing}/protection/mutation for that candidate, deterministically --
+     * without depending on real chunk-loading behavior, which proved to differ between
+     * environments in the reverted attempt above. {@code destination} is constructed as a REAL,
+     * otherwise-valid move (air destination, stone support): if the implementation incorrectly
+     * called {@code Smoothing.canSmooth}/{@code smooth} despite the injected "unloaded" result,
+     * the world WOULD show a real mutation -- its absence is the proof, not an inference from
+     * the outcome enum alone.
+     */
+    @GameTest(template = "flat_platform")
+    public static void anUnloadedDestinationIsSkippedBeforeAnySmoothingOrMutationCall(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 2, 1);
+        BlockPos eastDestination = pos.relative(Direction.EAST);
+        placeSourceWithOneValidEastNeighbor(helper, pos);
+        BlockState destinationBefore = helper.getBlockState(eastDestination);
+
+        ErosionProtectionGate gate = new ErosionProtectionGate();
+        gate.assertCoverage(grantingAdapter());
+        BlockPos absoluteEastDestination = helper.absolutePos(eastDestination);
+        java.util.function.Predicate<BlockPos> fakeUnloadedAtEastDestinationOnly =
+                candidate -> !candidate.equals(absoluteEastDestination);
+
+        ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(
+                (ServerLevel) helper.getLevel(), helper.absolutePos(pos),
+                SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
+                GUARANTEED_CHANCE_CONFIG, new ErosionDedup(), gate, true, fakeUnloadedAtEastDestinationOnly);
+
+        helper.assertTrue(outcome == ErosionAttempt.Outcome.NO_VALID_DIRECTION,
+                "the only real candidate's destination was faked unloaded, so it must be skipped entirely, got " + outcome);
+        helper.assertTrue(helper.getBlockState(eastDestination).equals(destinationBefore),
+                "Smoothing.smooth must never have been invoked for the faked-unloaded destination -- "
+                        + "a real mutation here would prove the loaded check was skipped or misordered");
+        helper.succeed();
+    }
 }

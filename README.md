@@ -62,19 +62,17 @@ This is a bounded, multi-slice implementation. Current slice:
       every real call is denied by construction regardless of whether a production adapter
       exists (see above). Takes slip/load telemetry as plain parameters; makes no assumption
       about where it comes from, since DIV's own per-wheel contact-telemetry seam is not wired in
-      yet (see below). `ErosionAttemptGameTests` (9 cases: default-closed denial, a granting
+      yet (see below). `ErosionAttemptGameTests` (10 cases: default-closed denial, a granting
       adapter still denied because propagation scope is never claimed known, a known-scope
       granting adapter actually applying a move with material conservation verified, per-tick
       dedup, a denied attempt and a failed roll each still consuming the dedup slot,
-      no-valid-direction, an off-thread call denied (bounded join, no deadlock risk) before
-      touching anything, and an unloaded source denied without force-loading it) prove it against
-      a real world, not primitives in isolation. A tenth case (a real loaded-source/
-      unloaded-destination chunk boundary via raw world coordinates) was implemented and passed
-      locally, but proved environment-dependent on the real GitHub Actions runner -- the
-      destination chunk it needed to stay unloaded was not unloaded there, for reasons not fully
-      diagnosed -- and was reverted rather than shipped flaky; see the trailing comment in that
-      file. The destination guard is otherwise still the identical `hasChunkAt` check at the
-      identical call shape as the already-tested source guard.
+      no-valid-direction, an off-thread call denied (bounded join with safe worker
+      interrupt/cleanup on timeout) before touching anything, an unloaded source denied without
+      force-loading it, and a deterministic instrumented-seam test proving an unloaded
+      destination is skipped before `Smoothing`/mutation ever runs for it -- using an injectable
+      destination-loaded predicate rather than real chunk state, after an earlier real-chunk
+      version of that last case passed locally but proved environment-dependent on the real
+      GitHub Actions runner) prove it against a real world, not primitives in isolation.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
       above), a concrete propagation/claim-aware `ProtectionAdapter` (its real scope is defined by
@@ -101,7 +99,7 @@ they are plain JUnit 5 tests with no Minecraft/NeoForge dependency.
 ```
 
 Boots a real dedicated server with this mod, `layered-slopes`, and `layered-slope-grading`
-installed and runs the 10 GameTests (boot-only, plus `ErosionAttemptGameTests`' 9 real-world
+installed and runs the 11 GameTests (boot-only, plus `ErosionAttemptGameTests`' 10 real-world
 orchestration cases). Wired into CI via `scripts/check_gametest_count.py`, which fails closed if
 the expected test count regresses. An opt-in `div-paired-runtime.yml` workflow additionally
 builds DIV fresh and boots everything together at DIV's real NeoForge floor.
