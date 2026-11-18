@@ -1,0 +1,76 @@
+name: Client-sync harness feasibility spike (opt-in)
+
+# Opt-in, CI-only, isolated runner (never Servy, never a shared/native-test-slot resource):
+# direction (comment 55058/55063) asks for real client-synchronization acceptance evidence, not
+# merely server-only GameTest results treated as if they proved what a real client receives.
+# NeoForge's GameTest framework runs entirely within a single JVM against a ServerLevel directly
+# -- it never opens a real network port and never sends a real client-bound packet, so no
+# GameTest result (in this repo or any other) can be truthfully reported as client-sync evidence.
+# Proving real client sync therefore requires a REAL second process: an actual Minecraft client
+# joining an actual dedicated server over a real socket, with the client's own ClientLevel (built
+# purely from received network packets) read back independently of whatever the server believes.
+#
+# This workflow is NOT that acceptance test yet. It is the necessary first feasibility spike:
+# does a real NeoForge dev client even boot at all on a GitHub Actions ubuntu-latest runner,
+# which has no GPU? Minecraft's client requires a real LWJGL/OpenGL context to initialize even
+# when never rendering anything a human would see; Xvfb + a software GL renderer (Mesa llvmpipe)
+# is the standard way to satisfy that in headless CI. If this spike fails, that is the precise,
+# concrete blocker to report -- not an excuse to fabricate client-sync evidence some other way.
+#
+# Success evidence here is real log content showing the client process reached a genuine
+# post-initialization state (the real "Created: ...x...x... Vec3i" texture-atlas-stitch line, or
+# an explicit "LWJGL Version"/window-creation line), never a bare process exit code -- the same
+# discipline every other workflow in this repo already follows.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/client-sync-harness-feasibility.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  headless-client-boot-spike:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Install Xvfb and a software GL renderer (Mesa llvmpipe) -- no GPU exists on this runner
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y xvfb mesa-utils libgl1-mesa-dri
+
+      - name: Attempt a real headless NeoForge dev client boot under Xvfb, bounded, never blocking on human input
+        run: |
+          set -o pipefail
+          xvfb-run -a --server-args="-screen 0 1280x720x24" \
+            timeout 180 ./gradlew runClient --no-daemon --stacktrace > client-boot.log 2>&1 || true
+          cat client-boot.log
+
+      - name: Verify the real client process actually reached genuine post-initialization, not merely that Gradle exited
+        run: |
+          # Content, never exit code (this repo's established discipline): a client that crashes
+          # during LWJGL/GL init still lets Gradle's own process report misleadingly. Look for a
+          # real line that only appears after OpenGL context creation and the title/main-menu
+          # screen have actually been reached.
+          if grep -qE 'LWJGL Version|OpenGL (Version|Vendor)|Reloading ResourceManager|Backend library|Narrator library' client-boot.log; then
+            echo "confirmed: a real NeoForge dev client reached genuine post-GL-init startup under Xvfb on this runner"
+          else
+            echo "::error::no real post-GL-init client startup evidence found -- headless client boot is NOT currently feasible on this runner; see client-boot.log for the actual failure"
+            tail -n 100 client-boot.log
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: client-boot-feasibility-log
+          path: client-boot.log
+          if-no-files-found: warn
