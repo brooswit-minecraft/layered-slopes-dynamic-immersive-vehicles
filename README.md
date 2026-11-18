@@ -257,7 +257,7 @@ This is a bounded, multi-slice implementation. Current slice:
       head `a68999c`: server log reports `outcome=PROTECTED`, and the already-connected client's
       own probe independently observed both endpoints genuinely unchanged
       (`minecraft:dirt`/`minecraft:air`).
-- [ ] Multiplayer client-sync acceptance (direction, comment 55159/55161): two new opt-in
+- [x] Multiplayer client-sync acceptance (direction, comment 55159/55161): two new opt-in
       workflows, `client-sync-acceptance-multiplayer-enabled.yml` and
       `client-sync-acceptance-multiplayer-rejected.yml`, boot TWO genuinely distinct,
       concurrently-connected client identities (different offline-mode usernames/UUIDs) against
@@ -265,7 +265,16 @@ This is a bounded, multi-slice implementation. Current slice:
       attempt and both independently observing the same real enabled 15+1 conservation or
       rejected/canceled-unchanged outcome -- reusing the existing single-client harness and
       `ErosionClientSyncLiveProbe` unmodified, via a new optional `--username` launch-argument
-      override. Implemented; not yet CI-verified.
+      override. Concurrent presence (not merely cumulative distinct joins) is proven via a real
+      `/list` command issued immediately before the attempt. Two real bugs surfaced and were
+      fixed during CI iteration: a `set -e` footgun where a bare failing `grep -c` assignment
+      silently aborted the whole script with no output, and a genuine race in
+      `ErosionClientSyncLiveProbe` (no settle delay before trusting a baseline read, exposed by
+      two client JVMs contending for CPU) -- fixed with the same settle-then-read discipline
+      `ErosionClientSyncProbe` already used. CI-verified: both clients independently report
+      `CHANGED`/`dynamicterrain:layered_dirt` 15+1, and both independently report `UNCHANGED`/
+      `minecraft:dirt`/`minecraft:air` with the server's own `/list` showing both identities
+      concurrently connected.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
       above), and gameplay acceptance evidence.
