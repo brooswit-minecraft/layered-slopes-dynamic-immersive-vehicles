@@ -328,9 +328,25 @@ neoForge {
                     (findProperty('erosionClientSyncProbePos') ?: '') as String
             systemProperty 'layeredslopesdynamicimmersivevehicles.clientSyncProbe.outputFile',
                     (findProperty('erosionClientSyncProbeOutputFile') ?: '') as String
+            // Test-only LIVE post-join client-sync probe (direction 55058/55111/55114): watches
+            // two positions and reports whether either actually changed WHILE this client was
+            // already connected, rather than a single fixed-settle snapshot -- distinct genuine
+            // evidence from ErosionClientSyncProbe above. Same opt-in discipline: absent/false
+            // by default.
+            systemProperty 'layeredslopesdynamicimmersivevehicles.clientSyncLiveProbe',
+                    (findProperty('erosionClientSyncLiveProbe') ?: 'false') as String
+            systemProperty 'layeredslopesdynamicimmersivevehicles.clientSyncLiveProbe.sourcePos',
+                    (findProperty('erosionClientSyncLiveProbeSourcePos') ?: '') as String
+            systemProperty 'layeredslopesdynamicimmersivevehicles.clientSyncLiveProbe.destPos',
+                    (findProperty('erosionClientSyncLiveProbeDestPos') ?: '') as String
+            systemProperty 'layeredslopesdynamicimmersivevehicles.clientSyncLiveProbe.readySignalFile',
+                    (findProperty('erosionClientSyncLiveProbeReadySignalFile') ?: '') as String
+            systemProperty 'layeredslopesdynamicimmersivevehicles.clientSyncLiveProbe.outputFile',
+                    (findProperty('erosionClientSyncLiveProbeOutputFile') ?: '') as String
             // Auto-join a local dedicated server headlessly (direction 55058/55063): only when
             // the harness opts in -- an ordinary ./gradlew runClient never gets these arguments.
-            if ((findProperty('erosionClientSyncProbe') ?: 'false') == 'true') {
+            if ((findProperty('erosionClientSyncProbe') ?: 'false') == 'true'
+                    || (findProperty('erosionClientSyncLiveProbe') ?: 'false') == 'true') {
                 // Vanilla's quickplay system also requires --quickPlayPath (it logs quickplay
                 // session state there) -- CI's first real run observed the client sit at
                 // texture/animation loading forever with zero connection activity on either
