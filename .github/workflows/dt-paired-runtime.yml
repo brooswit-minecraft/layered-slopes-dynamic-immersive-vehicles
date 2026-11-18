@@ -9,17 +9,25 @@ name: Dynamic Terrain paired-runtime check (opt-in)
 # one directly (no fresh-build step needed) -- this mod still keeps NO dependency on Dynamic
 # Terrain in its default build; this workflow is the only place a real one is ever installed.
 #
-# Proves DynamicTerrainCaveInRisk's real behavior (review 54916/54917/54919/54920) against an
-# actual pinned Dynamic Terrain, by running the whole GameTestServer TWICE: once with Dynamic
-# Terrain's own default caveInsEnabled=false config on disk before boot, once with a config file
-# pre-written with true before a separate boot. This proves both of Dynamic Terrain's own
-# states; it does NOT prove a live config reload mid-run without a server restart -- that
-# remains a documented, separate gap (see README.md).
+# Proves DynamicTerrainCaveInRisk's real behavior (review 54916/54917/54919/54920/54923/54925)
+# against an actual pinned Dynamic Terrain, by running the whole GameTestServer TWICE: once with
+# Dynamic Terrain's own default caveInsEnabled=false config on disk before boot, once with a
+# config file pre-written with true before a separate boot. DynamicTerrainPairedGameTests also
+# reads Dynamic Terrain's own DynamicTerrainConfig.CAVE_INS_ENABLED BooleanValue directly (safe
+# only in that opt-in-compiled class) and cross-checks it against this mod's generic reader, and
+# edits Dynamic Terrain's own config file on disk WHILE the false-boot server is still running to
+# prove (or disprove, and fail loudly either way) a live reload without a restart -- confirmed to
+# actually happen on a real pinned Dynamic Terrain, see DynamicTerrainPairedGameTests' javadoc.
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - '.github/workflows/dt-paired-runtime.yml'
+      - 'build.gradle'
+      - 'src/dtPaired/**'
+      - 'src/main/java/**/erosion/DynamicTerrainCaveInRisk.java'
+      - 'src/main/java/**/erosion/ErosionAttempt.java'
+      - 'src/main/java/**/erosion/ErosionAttemptGameTests.java'
 
 permissions:
   contents: read
@@ -44,10 +52,11 @@ jobs:
           set -o pipefail
           ./gradlew runGameTestServer --no-daemon -PdtPairedRuntime=true -PdtCaveInsEnabled=false \
             2>&1 | tee dt-paired-runtime-false.log
-          # 19 required tests: the default 18 (5 of which self-skip when Dynamic Terrain is
+          # 20 required tests: the default 18 (5 of which self-skip when Dynamic Terrain is
           # loaded, since they are not testing Dynamic Terrain interaction) plus
-          # DynamicTerrainPairedGameTests' 1 real case.
-          python3 scripts/check_gametest_count.py dt-paired-runtime-false.log 19
+          # DynamicTerrainPairedGameTests' 2 real cases (the config-agreement check, and the
+          # live-reload probe, which only exercises its body in this false-boot scenario).
+          python3 scripts/check_gametest_count.py dt-paired-runtime-false.log 20
 
       - name: Verify Dynamic Terrain's real config file reflects the false scenario just booted
         run: |
@@ -68,7 +77,7 @@ jobs:
           set -o pipefail
           ./gradlew runGameTestServer --no-daemon -PdtPairedRuntime=true -PdtCaveInsEnabled=true \
             2>&1 | tee dt-paired-runtime-true.log
-          python3 scripts/check_gametest_count.py dt-paired-runtime-true.log 19
+          python3 scripts/check_gametest_count.py dt-paired-runtime-true.log 20
 
       - name: Verify Dynamic Terrain's real config file reflects the true scenario just booted
         run: |

@@ -23,6 +23,15 @@ bump: minor
   unit-tests the version boundary directly; an opt-in `-PdtPairedRuntime=true` build
   (`.github/workflows/dt-paired-runtime.yml`) boots the real production path against an actual
   pinned Dynamic Terrain v5.0.1 twice, with its own real config set to `false` then `true`.
+  Review 54925 found that alone still insufficient -- neither observed Dynamic Terrain's own
+  loaded `BooleanValue` directly, so a divergence between the generic reader and Dynamic
+  Terrain's real value could pass unnoticed. `DynamicTerrainPairedGameTests` now reads
+  `DynamicTerrainConfig.CAVE_INS_ENABLED` directly (the one place this mod references Dynamic
+  Terrain's own Java classes, deliberately confined to this opt-in-only test class) and
+  cross-checks it against the generic reader. It also edits Dynamic Terrain's own config file on
+  disk WHILE the server keeps running and polls for a live reload -- confirmed, on a real pinned
+  Dynamic Terrain v5.0.1, that NeoForge's own config watcher picks up the change within seconds
+  and the production path transitions `APPLIED` -> `NEIGHBOR_CAVE_IN_RISK` accordingly.
 - `ErosionAttempt` now enforces both checks as mandatory, unconditional steps before any
   `Smoothing.smooth()` call -- not behind an optional, separately-installed adapter -- plus a
   final re-verification immediately before applying: `canSmooth` AND an exact source/destination

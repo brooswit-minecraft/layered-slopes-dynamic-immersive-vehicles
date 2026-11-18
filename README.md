@@ -96,9 +96,22 @@ This is a bounded, multi-slice implementation. Current slice:
         `.github/workflows/dt-paired-runtime.yml`, never part of the default build/test) proves
         the real production path against an actual pinned Dynamic Terrain v5.0.1, booting twice
         with its own real config file on disk set to `false` then `true` and requiring the
-        correct `ErosionAttempt.Outcome` each time. That workflow does NOT prove a live config
-        reload mid-run without a server restart -- not attempted, and called out explicitly
-        rather than silently assumed.
+        correct `ErosionAttempt.Outcome` each time. Review 54925 correctly found that alone still
+        insufficient: neither the test nor the workflow had ever observed Dynamic Terrain's own
+        loaded `DynamicTerrainConfig.CAVE_INS_ENABLED` value directly, so a divergence between
+        this mod's generic reader and Dynamic Terrain's real value could pass unnoticed.
+        `DynamicTerrainPairedGameTests` (compiled only in this opt-in profile, the one place
+        referencing Dynamic Terrain's own Java classes directly is deliberate and safe) now reads
+        that `BooleanValue` directly and cross-checks it against the generic reader before
+        checking the production outcome. It also edits Dynamic Terrain's own config file on disk
+        WHILE the false-boot server keeps running (no restart) and polls for the live value to
+        flip -- an evidence-gathering probe, not an assumption either way: confirmed, on a real
+        pinned Dynamic Terrain v5.0.1, that NeoForge's own config file watcher DOES pick up the
+        change and flip the value within a couple of seconds, and that the production path
+        transitions from `APPLIED` to `NEIGHBOR_CAVE_IN_RISK` accordingly, with this mod's generic
+        reader agreeing throughout. Had no reload been observed, the test would fail loudly
+        rather than silently pass, per review 54923's "fail closed for runtime changes" --
+        reload is confirmed to work, not merely hoped to.
 
         **Narrowed, not eliminated, limitation:** a world running Dynamic Terrain with
         `caveInsEnabled=true` (not the default) still gets no usable erosion -- building a finite
