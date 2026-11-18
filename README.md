@@ -50,11 +50,21 @@ This is a bounded, multi-slice implementation. Current slice:
       Pure logic, no Minecraft/NeoForge dependency. No production adapter exists yet, so every
       real `authorize()` call is denied by construction; full propagation/neighbor/cave-in
       coverage remains unimplemented.
-- [ ] Erosion consumer itself (server-thread authoritative, wiring the policy primitives above
-      together with real per-wheel telemetry and `Smoothing.smooth()`, multiplayer sync, default
-      OFF), the explicit propagation/claim-adapter protection implementation the gate above is
-      currently withholding, GameTest acceptance evidence for actual gameplay behavior,
-      dependency-failure tests, pinned-jar smoke acceptance.
+- [x] `ErosionAttempt`: the real per-position orchestration -- dedup claim, the accepted
+      MINECRAFT-555 slip-to-probability roll, a shuffled-direction-first-`canSmooth`-accepted
+      call into `Smoothing.smooth()`, and the `ErosionProtectionGate` check before any world
+      mutation (every real call is currently denied, since no production adapter exists -- see
+      above). Takes slip/load telemetry as plain parameters; makes no assumption about where that
+      telemetry comes from, since DIV's own per-wheel contact-telemetry seam is not wired in yet
+      (see below). `ErosionAttemptGameTests` (4 cases: protection denial, a granting-adapter
+      apply, per-tick dedup, no-valid-direction) prove it against a real world, not primitives in
+      isolation.
+- [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
+      telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
+      above), a concrete propagation/claim-aware `ProtectionAdapter` (its real scope is defined by
+      whatever neighbor-support consequence the DIV-side wiring actually produces -- not designed
+      in the abstract ahead of that), multiplayer sync, dependency-failure tests, pinned-jar smoke
+      acceptance, and gameplay acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 will default to OFF; operators running this mod alongside Dynamic Terrain's deprecated vehicle
@@ -75,7 +85,7 @@ they are plain JUnit 5 tests with no Minecraft/NeoForge dependency.
 ```
 
 Boots a real dedicated server with this mod, `layered-slopes`, and `layered-slope-grading`
-installed and runs `StandaloneBootGameTests` (one boot-only GameTest -- it proves the harness
-boots, not erosion/gameplay behavior). Wired into CI via `scripts/check_gametest_count.py`, which
-fails closed if the expected test count regresses. An opt-in `div-paired-runtime.yml` workflow
-additionally builds DIV fresh and boots everything together at DIV's real NeoForge floor.
+installed and runs the 5 GameTests (boot-only, plus `ErosionAttemptGameTests`' 4 real-world
+orchestration cases). Wired into CI via `scripts/check_gametest_count.py`, which fails closed if
+the expected test count regresses. An opt-in `div-paired-runtime.yml` workflow additionally
+builds DIV fresh and boots everything together at DIV's real NeoForge floor.

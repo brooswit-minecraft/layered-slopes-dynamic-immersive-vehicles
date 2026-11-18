@@ -13,11 +13,11 @@ log format against a real CI run: passing tests are only ever counted, never
 individually named, so only the completion/pass summary counts -- not a
 per-test-name substring check -- can work here.
 
-The first real GameTest exists now: StandaloneBootGameTests.theGameTestHarnessBootsForThisMod
-(a trivial helper.succeed() -- there is no erosion consumer or other gameplay behavior yet to
-test, only proof the harness itself boots for this mod). EXPECTED_REQUIRED_TEST_COUNT is that
-real count, 1 -- update it, never borrow a sibling mod's count or test-name list, as more real
-GameTests are added.
+StandaloneBootGameTests.theGameTestHarnessBootsForThisMod (a trivial helper.succeed() proving the
+harness boots) plus ErosionAttemptGameTests' 4 cases (protection-gate denial, a granting adapter
+actually applying a move, per-tick dedup, and no-valid-direction) are the real GameTests as of
+this slice. EXPECTED_REQUIRED_TEST_COUNT is that real count, 5 -- update it, never borrow a
+sibling mod's count or test-name list, as more real GameTests are added.
 """
 import re
 import sys
@@ -30,8 +30,8 @@ class RuntimeEvidenceError(ValueError):
 
 UNSET = "UNSET"
 
-# StandaloneBootGameTests.theGameTestHarnessBootsForThisMod only, as of this slice.
-EXPECTED_REQUIRED_TEST_COUNT = 1
+# StandaloneBootGameTests (1) + ErosionAttemptGameTests (4), as of this slice.
+EXPECTED_REQUIRED_TEST_COUNT = 5
 
 
 def verify_runtime_log(log_text, expected=EXPECTED_REQUIRED_TEST_COUNT):
