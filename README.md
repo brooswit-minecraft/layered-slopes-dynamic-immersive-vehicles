@@ -150,14 +150,23 @@ This is a bounded, multi-slice implementation. Current slice:
       `type="required"` declaration for that modId is untouched, so the dependency is
       genuinely, verifiably unmet, never simulated.
 
-      **Not yet covered, named explicitly rather than implied by the checkmark above** (review
-      54978): an incompatible-but-present *version* of either dependency (as opposed to fully
-      absent), the eventual DIV dependency's own missing/incompatible case once it exists, and
-      base-mod isolation (this mod alone, with neither compat target installed).
+- [x] Dependency-failure acceptance, incompatible-version case (direction, comment 54997): a
+      companion opt-in `incompatible-version-acceptance.yml` workflow proves NeoForge's own
+      `versionRange` check actually refuses to boot, with a message attributing THIS mod's own
+      requirement and naming the real installed (too old) version, when `layered-slopes` or
+      `layered-slope-grading` IS present but below the declared `[0.2.0,)` floor -- the
+      companion case to the missing-dependency acceptance above, which only covers fully absent.
+      `build.gradle`'s `-PincompatibleVersionDependency=<modid>` flag swaps only that jar's
+      `runtimeOnly` entry for a real, pinned, sha512-verified v0.1.0 release of the same mod
+      (`compileOnly` stays on the normal, current, compatible jar, so main code still compiles).
+
+      **Not yet covered, named explicitly rather than implied by the checkmarks above** (review
+      54978/54997): the eventual DIV dependency's own missing/incompatible case once it exists,
+      and base-mod isolation (this mod alone, with neither compat target installed).
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), multiplayer sync, incompatible-version/base-mod-isolation dependency acceptance,
-      pinned-jar smoke acceptance, and gameplay acceptance evidence.
+      above), multiplayer sync, base-mod-isolation dependency acceptance, pinned-jar smoke
+      acceptance, and gameplay acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 defaults to OFF via this mod's own real `erosionEnabled` server config (default `false`, see
