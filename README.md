@@ -24,8 +24,11 @@ This is a bounded, multi-slice implementation. Current slice:
       dependency, no RNG draw, no world mutation — pure functions and unit tests only.
 - [x] NeoForge mod scaffold: main mod class, `neoforge.mods.toml`, pinned (sha512-verified)
       download-and-verify dependencies on `layered-slopes` (v0.2.0) and `layered-slope-grading`
-      (v0.1.0). `StandaloneBootGameTests` confirms a real boot via `./gradlew runGameTestServer`
-      (0 mod requirements missing), wired into CI with `scripts/check_gametest_count.py`.
+      (v0.2.0 -- bumped from an initially-pinned v0.1.0 that predated `SmoothingAuthorizationEvent`
+      entirely, caught by review 54899/54901 via direct `unzip -l` inspection of the actual
+      release jar, not just its source tag). `StandaloneBootGameTests` confirms a real boot via
+      `./gradlew runGameTestServer` (0 mod requirements missing), wired into CI with
+      `scripts/check_gametest_count.py`.
 - [ ] DIV dependency and its contact-telemetry seam (per-wheel slip/load payload). Deferred: DIV
       ships no stable, sha512-pinnable GitHub Release at all (`gh release list` on that repo
       returns only private "not for publishing" draft test-builds), so it is not yet declared as
@@ -76,23 +79,25 @@ This is a bounded, multi-slice implementation. Current slice:
       environment-dependent on the real GitHub Actions runner. The seam's own sensitivity was
       verified by temporarily reordering the production check, confirming the test fails, then
       reverting) prove it against a real world, not primitives in isolation.
-- [x] `SmoothingScopeProtectionAdapter`: a real, not stand-in, `ProtectionAdapter`. It is correct
-      specifically because `Smoothing.smooth()` -- verified directly against its implementation
-      -- mutates exactly `source` and `source.relative(direction)`, nothing else; there is no
-      wider neighbor/cave-in scope for an erosion consumer built on that primitive to protect
-      against, which is a provable fact, not an unimplemented placeholder. `authorize()` denies
-      any request whose destination is not exactly one cardinal step from its source (scope-creep
-      defense) and defers the actual source/destination decision to `Smoothing.smooth()`'s own
-      already-wired `SmoothingAuthorizationEvent`, since this adapter cannot verify whether a
-      real third-party claim mod is listening and claiming so would be unverifiable. Building this
-      class does not by itself enable erosion: `ErosionAttempt`'s production overloads still pass
-      `propagationScopeKnown=false` and nothing installs this adapter on the gate yet -- wiring it
-      in as the default, and an on/off config switch, are deliberate, separate next decisions.
+- [ ] A real production `ProtectionAdapter`. A first attempt (`SmoothingScopeProtectionAdapter`)
+      was built and withdrawn after review 54899/54901: it claimed
+      `supportsSourceDestinationAuthorization=true` on the theory that `Smoothing.smooth()`'s own
+      `SmoothingAuthorizationEvent` backs it, but that event firing with no listener registered
+      is not a protection decision -- "event exists" and "a real claim system is actually
+      listening and would deny" are different claims, and this adapter could not verify the
+      second one. It also could not rule out `Block.UPDATE_ALL`-driven neighbor/cave-in
+      consequences (`LayeredBlock`'s own docs name Dynamic Terrain's cave-ins as one real,
+      external example). No concrete, named third-party claim/protection integration is in scope
+      to build against yet, so per the review's explicit alternative, this remains an open
+      question rather than another guessed design: either a specific supported integration gets
+      named (with real per-attempt authorization and tested effect scope, including protected
+      source/destination, missing-integration denial, and neighbor-sensitive cases), or
+      propagation/claim authorization stays denied indefinitely by design.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), wiring `SmoothingScopeProtectionAdapter` in as the gate's default and an explicit
-      default-OFF config switch before any real erosion can apply, multiplayer sync,
-      dependency-failure tests, pinned-jar smoke acceptance, and gameplay acceptance evidence.
+      above), the real `ProtectionAdapter` above, an explicit default-OFF config switch before
+      any real erosion can apply, multiplayer sync, dependency-failure tests, pinned-jar smoke
+      acceptance, and gameplay acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 will default to OFF; operators running this mod alongside Dynamic Terrain's deprecated vehicle
