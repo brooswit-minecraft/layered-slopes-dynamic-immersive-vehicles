@@ -1,19 +1,27 @@
 import unittest
 
-from check_gametest_count import RuntimeEvidenceError, verify_runtime_log
+from check_gametest_count import RuntimeEvidenceError, UNSET, verify_runtime_log
 
 BATCH_HEADER = "Running test batch 'defaultBatch:0' (3 tests)...\n"
 
 
 class CheckGameTestCountTest(unittest.TestCase):
-    def test_unset_expected_count_fails_closed_even_on_an_otherwise_valid_log(self):
-        # No explicit `expected` passed here -- uses the module's real UNSET default, the same
-        # one main() uses in production. Must refuse ANY log, including one that would
-        # otherwise look like a clean success, rather than silently accepting a 0-test or
-        # borrowed-count run as evidence of nothing.
+    def test_default_expected_count_is_wired_to_the_real_current_gametest_count(self):
+        # No explicit `expected` passed -- uses the module's real production default, which must
+        # be the actual current GameTest count for this mod (1:
+        # StandaloneBootGameTests.theGameTestHarnessBootsForThisMod), not the UNSET sentinel and
+        # not a stale/borrowed number.
+        log = ("Running test batch 'defaultBatch:0' (1 tests)...\n"
+               "=== 1 GAME TESTS COMPLETE IN 1.5s ===\nAll 1 required tests passed :)")
+        self.assertEqual(verify_runtime_log(log), 1)
+
+    def test_unset_sentinel_still_fails_closed_when_explicitly_selected(self):
+        # The UNSET-handling guard itself must still work correctly when explicitly selected
+        # (e.g. by a future reset to UNSET if the count is ever removed again), even though
+        # UNSET is no longer the active production default now that a real GameTest exists.
         log = BATCH_HEADER + "=== 3 GAME TESTS COMPLETE IN 1.5s ===\nAll 3 required tests passed :)"
         with self.assertRaises(RuntimeEvidenceError):
-            verify_runtime_log(log)
+            verify_runtime_log(log, expected=UNSET)
 
     # Every test below passes an explicit positive `expected` to actually exercise the
     # log-parsing logic -- relying on the module default here would let every one of these

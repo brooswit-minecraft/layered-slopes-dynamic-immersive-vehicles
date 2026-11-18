@@ -13,16 +13,11 @@ log format against a real CI run: passing tests are only ever counted, never
 individually named, so only the completion/pass summary counts -- not a
 per-test-name substring check -- can work here.
 
-NOT YET WIRED INTO ci.yml: this mod (MINECRAFT-510) has zero GameTests as of
-this slice -- `./gradlew runGameTestServer` here currently fails to start
-with "No test functions were given!" (confirmed live). EXPECTED_REQUIRED_TEST_COUNT
-is the UNSET sentinel below, not a borrowed number or a 0 that a genuine
-0-test log could satisfy: main() refuses to run at all while it is UNSET,
-the same fail-closed-on-an-unfilled-placeholder shape build.gradle's
-download tasks use for an unfilled "UNRELEASED" dependency pin. Wire this
-into ci.yml, and set EXPECTED_REQUIRED_TEST_COUNT to the real count, once
-the first real GameTest for this mod actually exists -- never copy a
-sibling mod's count or test-name list into this file again.
+The first real GameTest exists now: StandaloneBootGameTests.theGameTestHarnessBootsForThisMod
+(a trivial helper.succeed() -- there is no erosion consumer or other gameplay behavior yet to
+test, only proof the harness itself boots for this mod). EXPECTED_REQUIRED_TEST_COUNT is that
+real count, 1 -- update it, never borrow a sibling mod's count or test-name list, as more real
+GameTests are added.
 """
 import re
 import sys
@@ -35,11 +30,8 @@ class RuntimeEvidenceError(ValueError):
 
 UNSET = "UNSET"
 
-# No GameTest exists for this mod yet, so there is no real count to check against -- UNSET is a
-# sentinel, not a count, and main() refuses to run while it is UNSET (see below). Update to the
-# real count -- never a borrowed one -- when the first GameTest is added, and wire this script
-# into ci.yml at the same time.
-EXPECTED_REQUIRED_TEST_COUNT = UNSET
+# StandaloneBootGameTests.theGameTestHarnessBootsForThisMod only, as of this slice.
+EXPECTED_REQUIRED_TEST_COUNT = 1
 
 
 def verify_runtime_log(log_text, expected=EXPECTED_REQUIRED_TEST_COUNT):
