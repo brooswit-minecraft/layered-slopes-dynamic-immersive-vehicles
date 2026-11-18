@@ -1,0 +1,345 @@
+name: Client-sync acceptance, multiplayer enabled one-layer conservation case (opt-in)
+
+# Opt-in, CI-only, isolated runner (never Servy, never a shared/native-test-slot resource).
+# Direction (comment 55159/55161, after PR #15 merged): client-sync-acceptance-enabled.yml
+# already proves a single already-connected client observes a real LIVE post-join mutation, but
+# that alone does not establish multiplayer synchronization -- a single client's own view could
+# in principle diverge from what a second, independently-connected player would see. This slice
+# boots TWO genuinely distinct, concurrently-connected client identities (different offline-mode
+# usernames, so different UUIDs -- not the same login replacing itself) against the same server,
+# has BOTH independently capture their own baseline before a single forced erosion attempt, and
+# requires BOTH to independently observe the same real 15+1 material-conserving transition.
+#
+# Reuses client-sync-acceptance-enabled.yml's exact deterministic block arrangement and
+# GUARANTEED_CHANCE_CONFIG values. ErosionClientSyncLiveProbe's existing baseline/watch logic is
+# unchanged; the new optional `--username` override (build.gradle, opt-in via
+# erosionClientSyncUsername, blank/unset by default) lets a second client JVM join under a
+# different identity instead of every dev client defaulting to the same "Dev" account. (A
+# concurrent-CI-run race did require a probe fix -- a settle delay before trusting a baseline
+# read, matching ErosionClientSyncProbe's existing discipline -- see that class for detail.)
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/client-sync-acceptance-multiplayer-enabled.yml'
+      - 'build.gradle'
+      - 'gradle.properties'
+      - 'settings.gradle'
+      - 'gradle/wrapper/**'
+      - 'src/**'
+
+permissions:
+  contents: read
+
+jobs:
+  multiplayer-enabled-client-sync-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: server-side
+      - uses: actions/checkout@v4
+        with:
+          path: client-side-a
+      - uses: actions/checkout@v4
+        with:
+          path: client-side-b
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Install Xvfb, a software GL renderer (Mesa llvmpipe), and screenshot/input tooling for two headless clients
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y xvfb mesa-utils libgl1-mesa-dri x11-apps imagemagick xdotool
+
+      - name: Pre-seed the server's offline-mode server.properties and a test-only enabled-erosion config before first boot
+        run: |
+          mkdir -p server-side/run/config client-side-a/run client-side-b/run
+          echo "eula=true" > server-side/run/eula.txt
+          cat > server-side/run/server.properties <<'EOF'
+          online-mode=false
+          server-port=25581
+          level-seed=513
+          spawn-protection=0
+          EOF
+          # Exact values ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG uses, matching
+          # client-sync-acceptance-enabled.yml exactly.
+          cat > server-side/run/config/layeredslopesdynamicimmersivevehicles-server.toml <<'EOF'
+          erosionEnabled = true
+          slipThresholdMs = 0.15
+          baseErosionPerTick = 1000.0
+          referenceSlipMs = 10.0
+          referenceLoadKg = 300.0
+          maxSlipFactor = 3.0
+          minLoadFactor = 0.25
+          maxLoadFactor = 4.0
+          EOF
+
+      - name: Boot a real server and two genuinely distinct clients, wait for both to join and capture baselines, trigger one live mutation, verify BOTH independently observed the same transition, then stop everything gracefully
+        run: |
+          set -o pipefail
+          cd server-side
+          mkfifo stdin.pipe
+          exec 9<>stdin.pipe
+          timeout 900 ./gradlew runServer --no-daemon -PerosionClientSyncTest=true \
+            < stdin.pipe > server-boot.log 2>&1 &
+          server_pid=$!
+          cd ..
+
+          for i in $(seq 1 120); do
+            grep -q 'Done (' server-side/server-boot.log 2>/dev/null && break
+            sleep 2
+          done
+          if ! grep -q 'Done (' server-side/server-boot.log; then
+            echo "::error::server never reported 'Done (' -- see server-boot.log"
+            cat server-side/server-boot.log
+            exit 1
+          fi
+
+          # Deterministic arrangement from ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor,
+          # identical to client-sync-acceptance-enabled.yml.
+          printf 'forceload add 0 0\n' > server-side/stdin.pipe
+          sleep 2
+          for attempt in 1 2 3 4 5; do
+            {
+              printf 'setblock 0 -59 0 minecraft:dirt\n'
+              printf 'setblock 1 -59 0 minecraft:air\n'
+              printf 'setblock 1 -60 0 minecraft:stone\n'
+              printf 'setblock -1 -59 0 minecraft:stone\n'
+              printf 'setblock 0 -59 1 minecraft:stone\n'
+              printf 'setblock 0 -59 -1 minecraft:stone\n'
+            } > server-side/stdin.pipe
+            sleep 3
+            grep -qF 'Changed the block at 0, -59, 0' server-side/server-boot.log 2>/dev/null && break
+            echo "diagnostic: setup attempt $attempt did not land yet, retrying"
+          done
+          if ! grep -qF 'Changed the block at 0, -59, 0' server-side/server-boot.log; then
+            echo "::error::world setup never reached the server after 5 attempts -- see server-boot.log tail:"
+            tail -20 server-side/server-boot.log
+            kill -9 "$server_pid" 2>/dev/null || true
+            exit 1
+          fi
+
+          Xvfb :99 -screen 0 1280x720x24 &
+          xvfb_a_pid=$!
+          Xvfb :98 -screen 0 1280x720x24 &
+          xvfb_b_pid=$!
+          sleep 2
+
+          cd client-side-a
+          DISPLAY=:99 timeout 600 ./gradlew runClient --no-daemon \
+              -PerosionClientSyncLiveProbe=true \
+              -PerosionClientSyncQuickPlay=localhost:25581 \
+              -PerosionClientSyncLiveProbeSourcePos=0,-59,0 \
+              -PerosionClientSyncLiveProbeDestPos=1,-59,0 \
+              -PerosionClientSyncLiveProbeReadySignalFile="$(pwd)/client-ready-signal.txt" \
+              -PerosionClientSyncLiveProbeOutputFile="$(pwd)/client-live-probe-result.txt" \
+            > client-boot.log 2>&1 &
+          client_a_pid=$!
+          cd ..
+
+          # A real CI run hit client A crashing with a native-library (LWJGL) load failure
+          # ("Platform/architecture mismatch", UnsatisfiedLinkError on liblwjgl_stb.so) while
+          # client B booted fine from the same commit -- consistent with two concurrent Gradle
+          # processes racing over the shared GRADLE_USER_HOME cache during first-time native
+          # extraction. A separate isolated-GRADLE_USER_HOME fix for client B then blew the
+          # client timeout on a cold cache (a fresh ~790MB download). The real fix: stagger the
+          # launch so client B does not start its own first-time dependency/native resolution
+          # until client A's (the one that actually does the heavy one-time work against the
+          # shared cache) has already finished -- both keep the SAME shared, pre-warmed cache,
+          # so no race and no cold-cache cost for either. "Concurrently connected" only needs to
+          # hold during the observation window around the forced attempt, not at JVM start.
+          for i in $(seq 1 90); do
+            grep -qF 'Loaded 0 entity animations' client-side-a/client-boot.log 2>/dev/null && break
+            sleep 2
+          done
+          if ! grep -qF 'Loaded 0 entity animations' client-side-a/client-boot.log; then
+            echo "::error::client A never reached 'Loaded 0 entity animations' -- the staggered launch cannot be enforced; starting client B now would not actually be serialized after client A. client-side-a/client-boot.log tail:"
+            tail -20 client-side-a/client-boot.log || true
+            kill -9 "$server_pid" "$client_a_pid" "$xvfb_a_pid" "$xvfb_b_pid" 2>/dev/null || true
+            exit 1
+          fi
+
+          cd client-side-b
+          DISPLAY=:98 timeout 600 ./gradlew runClient --no-daemon \
+              -PerosionClientSyncLiveProbe=true \
+              -PerosionClientSyncQuickPlay=localhost:25581 \
+              -PerosionClientSyncUsername=DevSecond \
+              -PerosionClientSyncLiveProbeSourcePos=0,-59,0 \
+              -PerosionClientSyncLiveProbeDestPos=1,-59,0 \
+              -PerosionClientSyncLiveProbeReadySignalFile="$(pwd)/client-ready-signal.txt" \
+              -PerosionClientSyncLiveProbeOutputFile="$(pwd)/client-live-probe-result.txt" \
+            > client-boot.log 2>&1 &
+          client_b_pid=$!
+          cd ..
+
+          for i in $(seq 1 60); do
+            grep -qF 'Loaded 0 entity animations' client-side-b/client-boot.log 2>/dev/null && break
+            sleep 2
+          done
+          # Dismiss vanilla's first-run accessibility/narrator onboarding dialog on both displays
+          # -- no window manager, so windowactivate harmlessly fails every time.
+          for attempt in 1 2 3 4 5 6; do
+            DISPLAY=:99 xdotool mousemove 638 567 2>>client-side-a/xdotool.log || true
+            DISPLAY=:98 xdotool mousemove 638 567 2>>client-side-b/xdotool.log || true
+            sleep 1
+            DISPLAY=:99 xdotool mousedown 1 2>>client-side-a/xdotool.log || true
+            DISPLAY=:98 xdotool mousedown 1 2>>client-side-b/xdotool.log || true
+            sleep 1
+            DISPLAY=:99 xdotool mouseup 1 2>>client-side-a/xdotool.log || true
+            DISPLAY=:98 xdotool mouseup 1 2>>client-side-b/xdotool.log || true
+            joined_count=$(grep -cE 'joined the game' server-side/server-boot.log 2>/dev/null || true); joined_count=${joined_count:-0}
+            [ "$joined_count" -ge 2 ] && break
+            sleep 7
+          done
+          joined_count=$(grep -cE 'joined the game' server-side/server-boot.log 2>/dev/null || true); joined_count=${joined_count:-0}
+          if [ "$joined_count" -lt 2 ]; then
+            echo "::error::expected two distinct players to join, only saw $joined_count -- see server-boot.log tail and both client-boot.logs:"
+            tail -20 server-side/server-boot.log
+            cat client-side-a/client-boot.log || true
+            cat client-side-b/client-boot.log || true
+            kill -9 "$server_pid" "$client_a_pid" "$client_b_pid" "$xvfb_a_pid" "$xvfb_b_pid" 2>/dev/null || true
+            exit 1
+          fi
+          # Require the two joins to be genuinely distinct identities, not the same login
+          # replacing itself (which would log a "lost connection"/rejoin, not two concurrent
+          # "joined the game" lines for different names).
+          distinct_joined=$(grep -oE '^\[[0-9:]+\] \[Server thread/INFO\] \[minecraft/MinecraftServer\]: [A-Za-z0-9_]+ joined the game$' server-side/server-boot.log \
+            | sed -E 's/.*\]: ([A-Za-z0-9_]+) joined the game$/\1/' | sort -u | wc -l)
+          if [ "$distinct_joined" -lt 2 ]; then
+            echo "::error::expected two DISTINCT player names to join, only saw $distinct_joined distinct name(s) -- see server-boot.log tail:"
+            tail -20 server-side/server-boot.log
+            kill -9 "$server_pid" "$client_a_pid" "$client_b_pid" "$xvfb_a_pid" "$xvfb_b_pid" 2>/dev/null || true
+            exit 1
+          fi
+          printf 'tp @a 0 -60.5 0\n' > server-side/stdin.pipe
+          sleep 3
+
+          # BOTH clients must independently signal their own captured baseline before the single
+          # forced mutation is triggered.
+          a_ready=false
+          b_ready=false
+          for i in $(seq 1 60); do
+            [ -f client-side-a/client-ready-signal.txt ] && a_ready=true
+            [ -f client-side-b/client-ready-signal.txt ] && b_ready=true
+            [ "$a_ready" = "true" ] && [ "$b_ready" = "true" ] && break
+            sleep 2
+          done
+          if [ "$a_ready" != "true" ] || [ "$b_ready" != "true" ]; then
+            echo "::error::not both clients signaled a captured baseline (a=$a_ready b=$b_ready) -- client-boot.logs:"
+            cat client-side-a/client-boot.log || true
+            cat client-side-b/client-boot.log || true
+            kill -9 "$server_pid" "$client_a_pid" "$client_b_pid" "$xvfb_a_pid" "$xvfb_b_pid" 2>/dev/null || true
+            exit 1
+          fi
+
+          # Prove CONCURRENT presence of both distinct identities right at the moment of the
+          # attempt (review finding: cumulative distinct "joined the game" lines across the
+          # whole log only show each connected at SOME point, not that both were present
+          # together at this instant) via the server's own real /list response.
+          printf 'list\n' > server-side/stdin.pipe
+          list_line=""
+          for i in $(seq 1 10); do
+            list_line=$(grep 'There are' server-side/server-boot.log 2>/dev/null | tail -1 || true)
+            [ -n "$list_line" ] && break
+            sleep 1
+          done
+          echo "pre-attempt /list: $list_line"
+          list_names=$(echo "$list_line" | sed -E 's/.*online: ?//' | tr -d ' ')
+          if ! printf ',%s,' "$list_names" | grep -qF ',Dev,'; then
+            echo "::error::pre-attempt /list did not show Dev concurrently connected: '$list_line'"
+            kill -9 "$server_pid" "$client_a_pid" "$client_b_pid" "$xvfb_a_pid" "$xvfb_b_pid" 2>/dev/null || true
+            exit 1
+          fi
+          if ! printf ',%s,' "$list_names" | grep -qF ',DevSecond,'; then
+            echo "::error::pre-attempt /list did not show DevSecond concurrently connected: '$list_line'"
+            kill -9 "$server_pid" "$client_a_pid" "$client_b_pid" "$xvfb_a_pid" "$xvfb_b_pid" 2>/dev/null || true
+            exit 1
+          fi
+          echo "verified: both Dev and DevSecond concurrently present per real server /list output immediately before the single forced attempt"
+
+          # A single forced attempt -- both already-connected, already-watching clients must
+          # independently observe its result.
+          printf 'erosionclientsynctest 0 -59 0 5.0 300.0\n' > server-side/stdin.pipe
+          sleep 3
+          if ! grep -qF 'erosionclientsynctest outcome=APPLIED' server-side/server-boot.log; then
+            echo "::error::expected 'erosionclientsynctest outcome=APPLIED' in the server log -- the forced attempt did not succeed. server-boot.log tail:"
+            tail -20 server-side/server-boot.log
+            kill -9 "$server_pid" "$client_a_pid" "$client_b_pid" "$xvfb_a_pid" "$xvfb_b_pid" 2>/dev/null || true
+            exit 1
+          fi
+
+          a_found=false
+          b_found=false
+          for i in $(seq 1 90); do
+            [ -s client-side-a/client-live-probe-result.txt ] && a_found=true
+            [ -s client-side-b/client-live-probe-result.txt ] && b_found=true
+            [ "$a_found" = "true" ] && [ "$b_found" = "true" ] && break
+            sleep 2
+          done
+
+          echo "stop" > server-side/stdin.pipe
+          graceful=false
+          for i in $(seq 1 30); do
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              graceful=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$graceful" != "true" ]; then
+            kill -9 "$server_pid" 2>/dev/null || true
+          fi
+          kill -9 "$client_a_pid" "$client_b_pid" "$xvfb_a_pid" "$xvfb_b_pid" 2>/dev/null || true
+          exec 9>&-
+          rm -f server-side/stdin.pipe
+
+          if [ "$a_found" != "true" ] || [ "$b_found" != "true" ]; then
+            echo "::error::not both clients wrote a live-probe result (a=$a_found b=$b_found). client-boot.logs:"
+            cat client-side-a/client-boot.log || true
+            cat client-side-b/client-boot.log || true
+            exit 1
+          fi
+
+          for who in a b; do
+            eval "path=client-side-$who/client-live-probe-result.txt"
+            echo "=== client $who result ==="
+            cat "$path"
+            status=$(sed -n '1p' "$path")
+            source_block=$(sed -n '2p' "$path")
+            source_layers=$(sed -n '3p' "$path")
+            dest_block=$(sed -n '4p' "$path")
+            dest_layers=$(sed -n '5p' "$path")
+            if [ "$status" != "CHANGED" ]; then
+              echo "::error::client $who: expected CHANGED, got status '$status'"
+              exit 1
+            fi
+            if [ "$source_block" != "dynamicterrain:layered_dirt" ] || [ "$source_layers" != "15" ]; then
+              echo "::error::client $who: expected source dynamicterrain:layered_dirt/15 layers, got '$source_block'/$source_layers"
+              exit 1
+            fi
+            if [ "$dest_block" != "dynamicterrain:layered_dirt" ] || [ "$dest_layers" != "1" ]; then
+              echo "::error::client $who: expected destination dynamicterrain:layered_dirt/1 layer, got '$dest_block'/$dest_layers"
+              exit 1
+            fi
+          done
+          echo "confirmed: two genuinely distinct, concurrently-connected client identities both independently observed the SAME real LIVE post-join 15+1 material-conserving transition -- real multiplayer client-synchronization evidence, not a single client's own possibly-divergent view"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: client-sync-acceptance-multiplayer-enabled-evidence
+          path: |
+            server-side/server-boot.log
+            client-side-a/client-boot.log
+            client-side-a/client-live-probe-result.txt
+            client-side-a/client-ready-signal.txt
+            client-side-b/client-boot.log
+            client-side-b/client-live-probe-result.txt
+            client-side-b/client-ready-signal.txt
+          if-no-files-found: warn

@@ -358,6 +358,15 @@ neoForge {
                 programArgument '--quickPlayMultiplayer'
                 programArgument (findProperty('erosionClientSyncQuickPlay') ?: 'localhost:25577') as String
             }
+            // Multiplayer client-sync acceptance (direction 55159/55161): lets a harness boot a
+            // SECOND, genuinely distinct client identity concurrently connected to the same
+            // server, rather than every client defaulting to the same dev identity -- only when
+            // a harness explicitly opts in. Absent/blank by default, so every single-client
+            // workflow above is completely unaffected.
+            if ((findProperty('erosionClientSyncUsername') ?: '') != '') {
+                programArgument '--username'
+                programArgument (findProperty('erosionClientSyncUsername')) as String
+            }
         }
 
         server {

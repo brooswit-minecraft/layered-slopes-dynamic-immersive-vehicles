@@ -55,6 +55,16 @@ public final class ErosionClientSyncLiveProbe {
     private static final int MAX_WATCH_TICKS = 600;
     /** Ticks of continued observation required after the acknowledge file appears. */
     private static final int POST_ACKNOWLEDGE_WATCH_TICKS = 100;
+    /**
+     * Ticks to wait, once both positions are first tracked, before trusting a baseline read.
+     * A concurrent two-client CI run surfaced a real race: {@code hasChunkAt} can return true
+     * before the chunk's block data has fully settled from the initial sync packets, so a
+     * baseline captured on that very first tracked tick can read a transient/incomplete state
+     * that differs from the real value arriving a tick later -- reported as a false CHANGED
+     * before any real mutation ran. Matches the settle-then-read discipline
+     * {@link ErosionClientSyncProbe} already uses for exactly this reason.
+     */
+    private static final int BASELINE_SETTLE_TICKS = 20;
 
     private static boolean baselineCaptured = false;
     private static boolean done = false;
@@ -63,6 +73,7 @@ public final class ErosionClientSyncLiveProbe {
     private static String baselineDestId;
     private static int watchTicks = 0;
     private static int ticksSinceAcknowledge = 0;
+    private static int settleTicks = 0;
 
     private ErosionClientSyncLiveProbe() {
     }
@@ -77,15 +88,30 @@ public final class ErosionClientSyncLiveProbe {
         }
         Minecraft client = Minecraft.getInstance();
         ClientLevel level = client.level;
+        // Review finding: a gap in tracking (level unloaded, or either target chunk unloaded/
+        // reloaded) must restart the settle count -- otherwise this does not actually enforce
+        // CONSECUTIVE tracked ticks, only a cumulative total, which could let a baseline be
+        // captured right after a fresh (potentially still-transient) reload. Both early-return
+        // paths below count as "tracking unavailable", so both reset the counter identically.
         if (level == null) {
+            if (!baselineCaptured) {
+                settleTicks = 0;
+            }
             return;
         }
         BlockPos sourcePos = parsePos(System.getProperty(SOURCE_POS_PROPERTY));
         BlockPos destPos = parsePos(System.getProperty(DEST_POS_PROPERTY));
         if (sourcePos == null || destPos == null || !level.hasChunkAt(sourcePos) || !level.hasChunkAt(destPos)) {
+            if (!baselineCaptured) {
+                settleTicks = 0;
+            }
             return;
         }
         if (!baselineCaptured) {
+            settleTicks++;
+            if (settleTicks < BASELINE_SETTLE_TICKS) {
+                return;
+            }
             baselineSourceId = blockId(level.getBlockState(sourcePos));
             baselineDestId = blockId(level.getBlockState(destPos));
             baselineCaptured = true;
