@@ -19,11 +19,14 @@ name: DIV replacement-stack smoke (opt-in)
 #
 # `full-replacement-stack-smoke`: DIV + its own deps + layered-slopes + layered-slope-grading +
 # this compat mod's own packaged jar, all together -- the real, complete replacement stack.
-# Requires the real `Done (` line, all 6 expected mod ids in the real Mod List, a real graceful
-# shutdown (all three vanilla/NeoForge shutdown markers independently, per review 55015's
-# lesson), and the real generated compat-mod config defaulting `erosionEnabled` to `false`.
-# Records a sha256 manifest of the DIV commit/jar and this mod's own jar alongside the existing
-# sha512-pinned layered-slopes/layered-slope-grading versions.
+# Requires the real `Done (` line, all 7 expected mod ids in the real Mod List, the absence of
+# any real ModLoadingException/FAILED TO START failure marker, a real graceful shutdown (all
+# three vanilla/NeoForge shutdown markers independently, per review 55015's lesson), and the real
+# generated compat-mod config defaulting `erosionEnabled` to `false`.
+# Records a manifest with the DIV commit SHA, the existing sha512-pinned layered-slopes/
+# layered-slope-grading versions, and a deterministic filename:sha256 hash for every single jar
+# actually placed in server/mods/ and booted (per non-blocking finding MINECRAFT-558/review
+# 55045: not merely the DIV and compat jars alone).
 #
 # Neither job runs any GameTest (a real production server has no GameTest harness); success
 # evidence is the real startup/shutdown/mod-list/config content, never a bare process exit code.
