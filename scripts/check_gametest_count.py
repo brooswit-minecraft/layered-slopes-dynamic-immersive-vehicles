@@ -14,7 +14,7 @@ individually named, so only the completion/pass summary counts -- not a
 per-test-name substring check -- can work here.
 
 StandaloneBootGameTests.theGameTestHarnessBootsForThisMod (a trivial helper.succeed() proving the
-harness boots) plus ErosionAttemptGameTests' 17 cases: a real move applying and conserving
+harness boots) plus ErosionAttemptGameTests' 18 cases: a real move applying and conserving
 material with no claim mod/Dynamic Terrain installed (the "missing/unsupported integration"
 success case), a protected source, a protected destination, and a detected neighbor cave-in risk
 each denying (via injected orchestration-seam fakes), a REAL BlockEvent.BreakEvent listener
@@ -28,12 +28,17 @@ harmless case still applies rather than being overcorrected into a denial (revie
 direct check that an unknown config lookup fails closed to the caller's fallback, per-tick
 dedup, a denied attempt and a failed roll each still consuming the dedup slot, no-valid-direction,
 an off-thread call denied before touching anything, an unloaded source denied without
-force-loading it, and a deterministic instrumented-seam test proving an unloaded destination is
-skipped before Smoothing/mutation ever runs for it. These replaced an earlier design
+force-loading it, a deterministic instrumented-seam test proving an unloaded destination is
+skipped before Smoothing/mutation ever runs for it, and a disabled-by-default erosionEnabled=false
+attempt denying before touching the off-thread check/chunk/dedup/RNG/world at all without
+consuming the dedup slot (direction, comment 54943) -- plus ErosionModConfigGameTests' 2 cases
+proving the REAL registered NeoForge config actually boots with erosionEnabled=false and that
+editing its real on-disk file toggles it live, without a server restart, with the production path
+transitioning DISABLED -> APPLIED accordingly. These replaced an earlier design
 (ErosionProtectionGate/ProtectionAdapter-routed checks) found three separate times to overclaim
 a capability it did not verify (review 54855/54861/54878/54890/54899/54901) -- ClaimProtection
 and DynamicTerrainCaveInRisk are real, direct, unconditional checks instead.
-EXPECTED_REQUIRED_TEST_COUNT is that real count, 18 -- update it, never borrow a sibling mod's
+EXPECTED_REQUIRED_TEST_COUNT is that real count, 21 -- update it, never borrow a sibling mod's
 count or test-name list, as more real GameTests are added.
 """
 import re
@@ -47,8 +52,8 @@ class RuntimeEvidenceError(ValueError):
 
 UNSET = "UNSET"
 
-# StandaloneBootGameTests (1) + ErosionAttemptGameTests (17), as of this slice.
-EXPECTED_REQUIRED_TEST_COUNT = 18
+# StandaloneBootGameTests (1) + ErosionAttemptGameTests (18) + ErosionModConfigGameTests (2).
+EXPECTED_REQUIRED_TEST_COUNT = 21
 
 
 def verify_runtime_log(log_text, expected=EXPECTED_REQUIRED_TEST_COUNT):

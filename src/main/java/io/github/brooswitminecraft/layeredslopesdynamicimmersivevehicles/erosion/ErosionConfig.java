@@ -2,10 +2,26 @@ package io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosio
 
 /**
  * Immutable erosion-policy config snapshot, per the MINECRAFT-555 v4 prep packet (comment 54618,
- * approved 54622/54623). {@link #isValid()} checks all 7 fields plus the relational constraints
- * as one composed tuple (never field-by-field): {@link Overrides#reload} discards the ENTIRE
- * candidate and keeps every prior value unchanged if any single check fails (atomic reject,
- * case 28). Values are not individually mutable after construction.
+ * approved 54622/54623). {@link #isValid()} checks the 7 accepted-contract fields plus the
+ * relational constraints as one composed tuple (never field-by-field): {@link Overrides#reload}
+ * discards the ENTIRE candidate and keeps every prior value unchanged if any single check fails
+ * (atomic reject, case 28). Values are not individually mutable after construction.
+ *
+ * <p>{@link #erosionEnabled()} is a separate, later addition (direction from comment 54943): the
+ * mandatory default-OFF switch gating {@link ErosionAttempt}'s entire production path before any
+ * dedup/RNG/world work, matching the same spirit as Dynamic Terrain's own {@code erosionEnabled}
+ * (default {@code false}, "existing worlds are safe"). It rides along in the SAME immutable
+ * tuple and the SAME atomic-reject {@link Overrides#reload}, per that direction's explicit
+ * "preserve... immutable validated config snapshot/atomic rejected reload behavior" -- not a
+ * separate, parallel config mechanism. It has no relational constraint of its own ({@code
+ * isValid()} never rejects on its value alone); it exists purely to be read by the production
+ * path, not to be individually validated.
+ *
+ * <p>The original 7-argument constructor is kept, unchanged in meaning, for every existing call
+ * site (test and production) that predates this switch and was written assuming erosion is live
+ * -- it defaults {@code erosionEnabled} to {@code true}, preserving their exact prior behavior
+ * without editing them. {@link #DEFAULT} is the one place that explicitly opts into the real,
+ * safe-by-default value via the 8-argument constructor.
  */
 public final class ErosionConfig {
 
@@ -16,7 +32,8 @@ public final class ErosionConfig {
             300.0,  // referenceLoadKg
             3.0,    // maxSlipFactor
             0.25,   // minLoadFactor
-            4.0     // maxLoadFactor
+            4.0,    // maxLoadFactor
+            false   // erosionEnabled -- default OFF, existing worlds are safe
     );
 
     private final double slipThresholdMs;
@@ -26,10 +43,19 @@ public final class ErosionConfig {
     private final double maxSlipFactor;
     private final double minLoadFactor;
     private final double maxLoadFactor;
+    private final boolean erosionEnabled;
 
+    /** Predates the {@code erosionEnabled} switch; defaults it to {@code true} (see class javadoc). */
     public ErosionConfig(double slipThresholdMs, double baseErosionPerTick, double referenceSlipMs,
                           double referenceLoadKg, double maxSlipFactor, double minLoadFactor,
                           double maxLoadFactor) {
+        this(slipThresholdMs, baseErosionPerTick, referenceSlipMs, referenceLoadKg, maxSlipFactor,
+                minLoadFactor, maxLoadFactor, true);
+    }
+
+    public ErosionConfig(double slipThresholdMs, double baseErosionPerTick, double referenceSlipMs,
+                          double referenceLoadKg, double maxSlipFactor, double minLoadFactor,
+                          double maxLoadFactor, boolean erosionEnabled) {
         this.slipThresholdMs = slipThresholdMs;
         this.baseErosionPerTick = baseErosionPerTick;
         this.referenceSlipMs = referenceSlipMs;
@@ -37,6 +63,7 @@ public final class ErosionConfig {
         this.maxSlipFactor = maxSlipFactor;
         this.minLoadFactor = minLoadFactor;
         this.maxLoadFactor = maxLoadFactor;
+        this.erosionEnabled = erosionEnabled;
     }
 
     public double slipThresholdMs() {
@@ -67,10 +94,15 @@ public final class ErosionConfig {
         return maxLoadFactor;
     }
 
+    public boolean erosionEnabled() {
+        return erosionEnabled;
+    }
+
     /**
      * True if every finite-domain and relational constraint from the accepted contract holds.
      * Never partially applied by a caller -- {@link Overrides#reload} treats this as one atomic
-     * gate over the whole candidate tuple.
+     * gate over the whole candidate tuple. {@link #erosionEnabled()} is not checked here: a
+     * boolean switch has no invalid value, so it never causes a reject on its own.
      */
     public boolean isValid() {
         if (!(isFinite(slipThresholdMs) && slipThresholdMs >= 0.0 && slipThresholdMs < referenceSlipMs)) {

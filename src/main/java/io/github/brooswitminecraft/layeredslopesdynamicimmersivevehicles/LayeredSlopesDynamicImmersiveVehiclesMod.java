@@ -4,9 +4,12 @@ import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
 
+import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionModConfig;
+
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ModConfig;
 
 /**
  * Entry point for the dedicated Layered Slopes / Dynamic Immersive Vehicles (DIV) traction-loss
@@ -15,10 +18,12 @@ import net.neoforged.fml.common.Mod;
  * dependency on the other, and this mod has no dependency on Dynamic Terrain or Dynamic
  * Vehicles.
  *
- * <p>This slice (slice 2 of the ticket's bounded sequence) only establishes the real NeoForge
- * mod scaffold and pinned layered-slopes/layered-slope-grading dependencies -- no erosion
- * consumer is wired up yet. That depends on DIV's own contact-telemetry seam, which is itself
- * deferred pending MINECRAFT-545's active PR on DIV's PhysicsBridge.java.
+ * <p>Registers {@link ErosionModConfig#SPEC} as a real {@code ModConfig.Type.SERVER} config
+ * (direction, comment 54943's default-OFF switch) and listens for both its initial load and any
+ * later reload, routing each into {@link ErosionModConfig#OVERRIDES}' atomic-rejected reload.
+ *
+ * <p>No erosion consumer is wired up yet -- that depends on DIV's own contact-telemetry seam,
+ * which is itself deferred pending MINECRAFT-545's active PR on DIV's PhysicsBridge.java.
  */
 @Mod(LayeredSlopesDynamicImmersiveVehiclesMod.MODID)
 public class LayeredSlopesDynamicImmersiveVehiclesMod {
@@ -26,6 +31,9 @@ public class LayeredSlopesDynamicImmersiveVehiclesMod {
     public static final Logger LOGGER = LogUtils.getLogger();
 
     public LayeredSlopesDynamicImmersiveVehiclesMod(IEventBus modEventBus, ModContainer modContainer) {
+        modContainer.registerConfig(ModConfig.Type.SERVER, ErosionModConfig.SPEC);
+        modEventBus.addListener(ErosionModConfig::onLoad);
+        modEventBus.addListener(ErosionModConfig::onReload);
         LOGGER.info("Layered Slopes Dynamic Immersive Vehicles loaded (erosion consumer not yet wired up)");
     }
 }

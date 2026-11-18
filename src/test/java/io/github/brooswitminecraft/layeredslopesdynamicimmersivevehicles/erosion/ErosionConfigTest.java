@@ -102,4 +102,51 @@ class ErosionConfigTest {
     void defaultConfigIsItselfValid() {
         assertTrue(ErosionConfig.DEFAULT.isValid());
     }
+
+    // Direction, comment 54943: the default-OFF erosionEnabled switch rides in the same
+    // immutable tuple and atomic-reject reload as the 7 accepted-contract fields above.
+
+    @Test
+    void defaultConfigHasErosionDisabled() {
+        assertFalse(ErosionConfig.DEFAULT.erosionEnabled());
+    }
+
+    @Test
+    void theLegacySevenArgConstructorDefaultsErosionEnabledToTrue() {
+        // Every call site written before this switch existed assumed erosion is live; the
+        // 7-arg constructor must keep that assumption true without those call sites changing.
+        ErosionConfig c = new ErosionConfig(0.15, 0.01, 10.0, 300.0, 3.0, 0.25, 4.0);
+        assertTrue(c.erosionEnabled());
+    }
+
+    @Test
+    void erosionEnabledNeverCausesIsValidToRejectOnItsOwn() {
+        ErosionConfig enabled = new ErosionConfig(0.15, 0.01, 10.0, 300.0, 3.0, 0.25, 4.0, true);
+        ErosionConfig disabled = new ErosionConfig(0.15, 0.01, 10.0, 300.0, 3.0, 0.25, 4.0, false);
+        assertTrue(enabled.isValid());
+        assertTrue(disabled.isValid());
+    }
+
+    @Test
+    void atomicReject_alsoPreservesThePriorErosionEnabledValue() {
+        ErosionConfig.Overrides overrides = new ErosionConfig.Overrides(
+                new ErosionConfig(0.15, 0.01, 10.0, 300.0, 3.0, 0.25, 4.0, true));
+        // Individually-valid tuning fields, but erosionEnabled flipped to false and
+        // baseErosionPerTick=0.0 is invalid (case 24) -- the whole candidate, including the
+        // erosionEnabled flip, must be rejected and the prior true value retained.
+        ErosionConfig candidate = new ErosionConfig(0.20, 0.0, 20.0, 500.0, 2.0, 0.5, 3.0, false);
+
+        assertFalse(overrides.reload(candidate));
+        assertTrue(overrides.current().erosionEnabled());
+    }
+
+    @Test
+    void validReload_actuallyAppliesANewErosionEnabledValue() {
+        ErosionConfig.Overrides overrides = new ErosionConfig.Overrides();
+        assertFalse(overrides.current().erosionEnabled());
+
+        ErosionConfig candidate = new ErosionConfig(0.15, 0.01, 10.0, 300.0, 3.0, 0.25, 4.0, true);
+        assertTrue(overrides.reload(candidate));
+        assertTrue(overrides.current().erosionEnabled());
+    }
 }

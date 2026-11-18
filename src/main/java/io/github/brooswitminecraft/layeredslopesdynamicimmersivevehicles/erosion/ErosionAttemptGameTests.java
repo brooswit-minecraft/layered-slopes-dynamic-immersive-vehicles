@@ -46,6 +46,10 @@ public final class ErosionAttemptGameTests {
     static final double SLIP_ABOVE_THRESHOLD_MS = 5.0;
     static final double REFERENCE_LOAD_KG = 300.0;
     private static final double TINY_CHANCE_SLIP_MS = 0.16; // just above DEFAULT's 0.15 threshold
+    /** {@code ErosionConfig.DEFAULT}'s 7 tuning values, but with {@code erosionEnabled} explicitly
+     * {@code true} -- {@code DEFAULT} itself defaults that switch OFF (direction comment 54943). */
+    private static final ErosionConfig DEFAULT_TUNING_ENABLED =
+            new ErosionConfig(0.15, 0.01, 10.0, 300.0, 3.0, 0.25, 4.0, true);
 
     /**
      * EAST is the only candidate direction {@code canSmooth} can accept: the other three are
@@ -88,6 +92,38 @@ public final class ErosionAttemptGameTests {
                 canSmooth != null ? canSmooth : Smoothing::canSmooth,
                 claim != null ? claim : ClaimProtection::mayMutate,
                 caveInRisk != null ? caveInRisk : DynamicTerrainCaveInRisk::isPresent);
+    }
+
+    /**
+     * Direction, comment 54943: the default-OFF {@code erosionEnabled} switch must deny before
+     * touching the off-thread check, chunk, dedup, RNG, or world at all -- not merely "before
+     * mutating." Proven the same way the off-thread/unloaded-source cases already are: a
+     * subsequent, DIFFERENT (enabled) attempt at the exact same (dimension, block, tick) still
+     * applies normally, which could only happen if the disabled attempt never called
+     * {@code dedup.tryClaim} at all.
+     */
+    @GameTest(template = "flat_platform")
+    public static void erosionDisabledDeniesBeforeTouchingAnythingAndDoesNotConsumeTheDedupSlot(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 2, 1);
+        placeSourceWithOneValidEastNeighbor(helper, pos);
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos absolutePos = helper.absolutePos(pos);
+        ErosionDedup dedup = new ErosionDedup();
+        ErosionConfig disabled = new ErosionConfig(0.15, 1000.0, 10.0, 300.0, 3.0, 0.25, 4.0, false);
+
+        ErosionAttempt.Outcome first = ErosionAttempt.attempt(level, absolutePos,
+                SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1), disabled, dedup);
+        helper.assertTrue(first == ErosionAttempt.Outcome.DISABLED, "expected DISABLED, got " + first);
+        helper.assertTrue(helper.getBlockState(pos).getBlock() == Blocks.DIRT,
+                "a disabled attempt must not mutate the world at all");
+
+        ErosionAttempt.Outcome second = ErosionAttempt.attempt(level, absolutePos,
+                SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
+                GUARANTEED_CHANCE_CONFIG, dedup);
+        helper.assertTrue(second == ErosionAttempt.Outcome.APPLIED,
+                "a disabled attempt must not have consumed the dedup slot -- a same-tick enabled "
+                        + "retry should still apply, got " + second);
+        helper.succeed();
     }
 
     /**
@@ -235,10 +271,13 @@ public final class ErosionAttemptGameTests {
 
     /**
      * Regression (review 54878 finding 3): a nonzero-chance roll that fails must still consume
-     * the dedup slot. {@code TINY_CHANCE_SLIP_MS} with {@code ErosionConfig.DEFAULT} produces a
-     * probability of roughly 1e-5 against dirt -- any fixed seed's roll failing is a practical
-     * certainty (this test is about dedup bookkeeping, not re-proving the roll's own math, which
-     * {@code ErosionMathTest} already covers exactly).
+     * the dedup slot. {@code TINY_CHANCE_SLIP_MS} with {@code DEFAULT_TUNING_ENABLED} (the same
+     * 7 accepted-contract tuning values as {@code ErosionConfig.DEFAULT}, but with
+     * {@code erosionEnabled} explicitly {@code true} -- {@code DEFAULT} itself defaults that
+     * switch OFF, per direction comment 54943, and this test is about roll/dedup bookkeeping,
+     * not the switch) produces a probability of roughly 1e-5 against dirt -- any fixed seed's
+     * roll failing is a practical certainty (this test is about dedup bookkeeping, not
+     * re-proving the roll's own math, which {@code ErosionMathTest} already covers exactly).
      */
     @GameTest(template = "flat_platform")
     public static void aFailedRollStillConsumesTheDedupSlot(GameTestHelper helper) {
@@ -250,10 +289,10 @@ public final class ErosionAttemptGameTests {
 
         ErosionAttempt.Outcome first = ErosionAttempt.attempt(level, absolutePos,
                 TINY_CHANCE_SLIP_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
-                ErosionConfig.DEFAULT, dedup);
+                DEFAULT_TUNING_ENABLED, dedup);
         ErosionAttempt.Outcome second = ErosionAttempt.attempt(level, absolutePos,
                 TINY_CHANCE_SLIP_MS, REFERENCE_LOAD_KG, RandomSource.create(2),
-                ErosionConfig.DEFAULT, dedup);
+                DEFAULT_TUNING_ENABLED, dedup);
 
         helper.assertTrue(first == ErosionAttempt.Outcome.ROLL_FAILED, "expected first ROLL_FAILED, got " + first);
         helper.assertTrue(second == ErosionAttempt.Outcome.DUPLICATE_THIS_TICK,

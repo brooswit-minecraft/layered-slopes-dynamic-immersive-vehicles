@@ -138,7 +138,7 @@ This is a bounded, multi-slice implementation. Current slice:
       candidate position's chunk is confirmed loaded before any block query, never force-loading
       one. Takes slip/load telemetry as plain parameters; makes no assumption about where it comes
       from, since DIV's own per-wheel contact-telemetry seam is not wired in yet (see below).
-      `ErosionAttemptGameTests` (17 cases) prove this against a real world: a real move applying
+      `ErosionAttemptGameTests` (18 cases) prove this against a real world: a real move applying
       and conserving material with no claim mod/Dynamic Terrain installed (the
       "missing/unsupported integration" success case), a protected source, a protected
       destination, and a detected cave-in risk each denying (via injected orchestration-seam
@@ -153,22 +153,44 @@ This is a bounded, multi-slice implementation. Current slice:
       fallback, per-tick dedup, a denied attempt and a failed roll each still consuming
       the dedup slot, no-valid-direction, an off-thread call denied (bounded join with safe
       worker interrupt/cleanup on timeout) before touching anything, an unloaded source denied
-      without force-loading it, and a deterministic instrumented-seam test proving
+      without force-loading it, a deterministic instrumented-seam test proving
       `Smoothing.canSmooth` itself is never even queried for an unloaded destination -- not just
       "no mutation happened," which a reordered implementation could still satisfy; verified by
-      temporarily reordering the production check, confirming the test fails, then reverting.
+      temporarily reordering the production check, confirming the test fails, then reverting --
+      and (direction, comment 54943) a disabled-by-default `erosionEnabled=false` attempt denying
+      with `Outcome.DISABLED` before touching the off-thread check/chunk/dedup/RNG/world at all,
+      without consuming the dedup slot.
 - [x] `ErosionProtectionGate`/`ProtectionAdapter` (merged PR #3) remains in the codebase, valid on
       its own terms, but is no longer part of `ErosionAttempt`'s real path for the reason above --
       its Minecraft-free abstraction cannot host a real world-aware check.
+- [x] Explicit default-OFF config switch (direction, comment 54943): `ErosionConfig` gained an
+      8th field, `erosionEnabled` (default `false`), additive to the MINECRAFT-555-accepted
+      7-field tuple -- the legacy 7-arg constructor every prior call site (test and production)
+      used defaults it to `true`, so no existing call site's meaning changed. `ErosionAttempt`
+      checks it as the very first thing, before even the off-thread assertion. `ErosionModConfig`
+      registers a real `ModConfig.Type.SERVER` spec (matching DT's own "existing worlds are safe"
+      convention) with every tuning field independently bounded the same way
+      `ErosionConfig#isValid()` bounds them -- but `ModConfigSpec` cannot express the accepted
+      contract's RELATIONAL constraints (`slipThresholdMs < referenceSlipMs`,
+      `minLoadFactor <= maxLoadFactor`), so a file could pass every individual field's bounds and
+      still describe a relationally-invalid whole tuple. `onLoad`/`onReload` re-derive a full
+      candidate from the live spec values on every load/reload and route it through
+      `ErosionConfig.Overrides#reload`, so that case is still atomically rejected as a whole --
+      `ErosionConfigTest`'s case 28 already proved this in isolation; `ErosionModConfigGameTests`
+      proves the real registered config actually boots with `erosionEnabled=false` and that
+      editing its real on-disk file toggles it live, without a server restart (confirmed to
+      actually happen, the same way the Dynamic Terrain probe above confirmed NeoForge's own
+      config-reload behavior), with the production path transitioning `DISABLED` -> `APPLIED`
+      accordingly.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), an explicit default-OFF config switch before any real erosion can apply,
-      multiplayer sync, dependency-failure tests, pinned-jar smoke acceptance, and gameplay
-      acceptance evidence.
+      above), multiplayer sync, dependency-failure tests, pinned-jar smoke acceptance, and
+      gameplay acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
-will default to OFF; operators running this mod alongside Dynamic Terrain's deprecated vehicle
-erosion should disable DT's `vehicleErosion` to avoid double effects.
+defaults to OFF via this mod's own real `erosionEnabled` server config (default `false`, see
+above); operators running this mod alongside Dynamic Terrain's deprecated vehicle erosion should
+disable DT's `vehicleErosion` to avoid double effects.
 
 ## Building
 
@@ -185,8 +207,9 @@ they are plain JUnit 5 tests with no Minecraft/NeoForge dependency.
 ```
 
 Boots a real dedicated server with this mod, `layered-slopes`, and `layered-slope-grading`
-installed and runs the 18 GameTests (boot-only, plus `ErosionAttemptGameTests`' 17 real-world
-orchestration cases). Wired into CI via `scripts/check_gametest_count.py`, which fails closed if
+installed and runs the 21 GameTests (boot-only, plus `ErosionAttemptGameTests`' 18 real-world
+orchestration cases, plus `ErosionModConfigGameTests`' 2 real default-OFF-switch cases). Wired
+into CI via `scripts/check_gametest_count.py`, which fails closed if
 the expected test count regresses. An opt-in `div-paired-runtime.yml` workflow additionally
 builds DIV fresh and boots everything together at DIV's real NeoForge floor. A second opt-in
 `dt-paired-runtime.yml` workflow boots this mod with a real, pinned Dynamic Terrain installed

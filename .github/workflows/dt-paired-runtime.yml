@@ -52,11 +52,11 @@ jobs:
           set -o pipefail
           ./gradlew runGameTestServer --no-daemon -PdtPairedRuntime=true -PdtCaveInsEnabled=false \
             2>&1 | tee dt-paired-runtime-false.log
-          # 20 required tests: the default 18 (5 of which self-skip when Dynamic Terrain is
+          # 23 required tests: the default 21 (5 of which self-skip when Dynamic Terrain is
           # loaded, since they are not testing Dynamic Terrain interaction) plus
           # DynamicTerrainPairedGameTests' 2 real cases (the config-agreement check, and the
           # live-reload probe, which only exercises its body in this false-boot scenario).
-          python3 scripts/check_gametest_count.py dt-paired-runtime-false.log 20
+          python3 scripts/check_gametest_count.py dt-paired-runtime-false.log 23
 
       - name: Verify Dynamic Terrain's real config file reflects the false scenario just booted
         run: |
@@ -77,7 +77,7 @@ jobs:
           set -o pipefail
           ./gradlew runGameTestServer --no-daemon -PdtPairedRuntime=true -PdtCaveInsEnabled=true \
             2>&1 | tee dt-paired-runtime-true.log
-          python3 scripts/check_gametest_count.py dt-paired-runtime-true.log 20
+          python3 scripts/check_gametest_count.py dt-paired-runtime-true.log 23
 
       - name: Verify Dynamic Terrain's real config file reflects the true scenario just booted
         run: |
