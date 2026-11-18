@@ -11,10 +11,12 @@ name: Client-sync acceptance, multiplayer enabled one-layer conservation case (o
 # requires BOTH to independently observe the same real 15+1 material-conserving transition.
 #
 # Reuses client-sync-acceptance-enabled.yml's exact deterministic block arrangement and
-# GUARANTEED_CHANCE_CONFIG values, and ErosionClientSyncLiveProbe unmodified -- only the new,
-# optional `--username` override (build.gradle, opt-in via erosionClientSyncUsername, blank/unset
-# by default) is new, letting a second client JVM join under a different identity instead of
-# every dev client defaulting to the same "Dev" account.
+# GUARANTEED_CHANCE_CONFIG values. ErosionClientSyncLiveProbe's existing baseline/watch logic is
+# unchanged; the new optional `--username` override (build.gradle, opt-in via
+# erosionClientSyncUsername, blank/unset by default) lets a second client JVM join under a
+# different identity instead of every dev client defaulting to the same "Dev" account. (A
+# concurrent-CI-run race did require a probe fix -- a settle delay before trusting a baseline
+# read, matching ErosionClientSyncProbe's existing discipline -- see that class for detail.)
 on:
   workflow_dispatch:
   pull_request:

@@ -10,8 +10,9 @@ bump: minor
   outcome: the enabled case's 15+1 material-conserving transition, or the rejected case's
   specific `outcome=PROTECTED` world-border denial leaving both endpoints unchanged (reusing the
   existing post-acknowledgment observation window as-is).
-- `ErosionClientSyncLiveProbe` and the existing deterministic block arrangements/
-  `GUARANTEED_CHANCE_CONFIG` values are reused unmodified. The only new surface is an optional
+- The existing deterministic block arrangements and `GUARANTEED_CHANCE_CONFIG` values are
+  reused unmodified; `ErosionClientSyncLiveProbe`'s baseline/watch/acknowledge logic required one
+  fix (below). The only other new surface is an optional
   `--username` launch-argument override in `build.gradle` (`erosionClientSyncUsername`,
   blank/unset by default), letting a second client JVM join under a distinct identity instead of
   every dev client defaulting to the same account; every existing single-client workflow is
@@ -35,3 +36,6 @@ bump: minor
   from the real synced value a tick later, reported as a false `CHANGED` before any real mutation
   ran, disconnecting the client early. Added the same settle-then-read discipline
   (`BASELINE_SETTLE_TICKS`).
+- Review finding on that fix: the settle-tick counter was not reset when an intervening tick
+  found the chunk no longer tracked, so it accumulated a cumulative total rather than actually
+  enforcing consecutive tracked ticks as claimed. Fixed to reset the counter on any such gap.

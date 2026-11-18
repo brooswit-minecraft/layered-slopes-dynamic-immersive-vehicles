@@ -94,6 +94,13 @@ public final class ErosionClientSyncLiveProbe {
         BlockPos sourcePos = parsePos(System.getProperty(SOURCE_POS_PROPERTY));
         BlockPos destPos = parsePos(System.getProperty(DEST_POS_PROPERTY));
         if (sourcePos == null || destPos == null || !level.hasChunkAt(sourcePos) || !level.hasChunkAt(destPos)) {
+            // Review finding: a gap in tracking (chunk unloaded/reloaded) must restart the
+            // settle count -- otherwise this does not actually enforce CONSECUTIVE tracked
+            // ticks, only a cumulative total, which could let a baseline be captured right after
+            // a fresh (potentially still-transient) reload.
+            if (!baselineCaptured) {
+                settleTicks = 0;
+            }
             return;
         }
         if (!baselineCaptured) {

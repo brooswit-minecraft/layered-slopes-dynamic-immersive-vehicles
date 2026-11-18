@@ -11,8 +11,11 @@ name: Client-sync acceptance, multiplayer rejected/canceled unchanged case (opt-
 #
 # Reuses client-sync-acceptance-rejected.yml's exact world-border denial mechanism (verified
 # against WorldBorder#isWithinBounds's real strict-upper-bound semantics, and against vanilla's
-# own /worldborder center block-centering of bare-integer arguments) and ErosionClientSyncLiveProbe
-# unmodified; only the new, optional `--username` override (build.gradle) is new.
+# own /worldborder center block-centering of bare-integer arguments). ErosionClientSyncLiveProbe's
+# existing baseline/watch/acknowledge logic is unchanged; the new optional `--username` override
+# (build.gradle) is new. (A concurrent-CI-run race did require a probe fix -- a settle delay
+# before trusting a baseline read, matching ErosionClientSyncProbe's existing discipline -- see
+# that class for detail.)
 on:
   workflow_dispatch:
   pull_request:

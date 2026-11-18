@@ -264,14 +264,16 @@ This is a bounded, multi-slice implementation. Current slice:
       the same server, both independently capturing their own baseline before a single forced
       attempt and both independently observing the same real enabled 15+1 conservation or
       rejected/canceled-unchanged outcome -- reusing the existing single-client harness and
-      `ErosionClientSyncLiveProbe` unmodified, via a new optional `--username` launch-argument
-      override. Concurrent presence (not merely cumulative distinct joins) is proven via a real
-      `/list` command issued immediately before the attempt. Two real bugs surfaced and were
-      fixed during CI iteration: a `set -e` footgun where a bare failing `grep -c` assignment
-      silently aborted the whole script with no output, and a genuine race in
-      `ErosionClientSyncLiveProbe` (no settle delay before trusting a baseline read, exposed by
-      two client JVMs contending for CPU) -- fixed with the same settle-then-read discipline
-      `ErosionClientSyncProbe` already used. CI-verified: both clients independently report
+      `ErosionClientSyncLiveProbe`'s existing baseline/watch/acknowledge logic unchanged, via a
+      new optional `--username` launch-argument override. Concurrent presence (not merely
+      cumulative distinct joins) is proven via a real `/list` command issued immediately before
+      the attempt. Several real bugs surfaced and were fixed during CI iteration: a `set -e`
+      footgun where a bare failing `grep -c` assignment silently aborted the whole script with no
+      output; a genuine race in `ErosionClientSyncLiveProbe` (no settle delay before trusting a
+      baseline read, exposed by two client JVMs contending for CPU) -- fixed with the same
+      settle-then-read discipline `ErosionClientSyncProbe` already used; and a review finding
+      that the settle-tick counter was not reset on an intervening tracking gap, so it did not
+      actually enforce consecutive tracked ticks as claimed -- fixed to reset on any gap. CI-verified: both clients independently report
       `CHANGED`/`dynamicterrain:layered_dirt` 15+1, and both independently report `UNCHANGED`/
       `minecraft:dirt`/`minecraft:air` with the server's own `/list` showing both identities
       concurrently connected.
