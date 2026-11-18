@@ -17,10 +17,11 @@ name: Client-sync harness feasibility spike (opt-in)
 # is the standard way to satisfy that in headless CI. If this spike fails, that is the precise,
 # concrete blocker to report -- not an excuse to fabricate client-sync evidence some other way.
 #
-# Success evidence here is real log content showing the client process reached a genuine
-# post-initialization state (the real "Created: ...x...x... Vec3i" texture-atlas-stitch line, or
-# an explicit "LWJGL Version"/window-creation line), never a bare process exit code -- the same
-# discipline every other workflow in this repo already follows.
+# Success evidence here is the real, late "[minecraft/TextureAtlas]: Created:" texture-atlas-
+# stitch line -- never a bare process exit code, and never an early LWJGL/backend-library/
+# narrator-init line alone, which a client that crashes moments later would still have printed
+# (self-review finding on PR #12: an early line is not proof the client didn't crash before
+# reaching real post-GL-init readiness).
 on:
   workflow_dispatch:
   pull_request:
@@ -57,13 +58,21 @@ jobs:
       - name: Verify the real client process actually reached genuine post-initialization, not merely that Gradle exited
         run: |
           # Content, never exit code (this repo's established discipline): a client that crashes
-          # during LWJGL/GL init still lets Gradle's own process report misleadingly. Look for a
-          # real line that only appears after OpenGL context creation and the title/main-menu
-          # screen have actually been reached.
-          if grep -qE 'LWJGL Version|OpenGL (Version|Vendor)|Reloading ResourceManager|Backend library|Narrator library' client-boot.log; then
-            echo "confirmed: a real NeoForge dev client reached genuine post-GL-init startup under Xvfb on this runner"
+          # during LWJGL/GL init still lets Gradle's own process report misleadingly. Self-review
+          # finding (55064-ish, PR #12 review): an EARLY line like "Backend library: LWJGL
+          # version ..." or the narrator's init attempt is emitted before OpenGL context creation
+          # is actually confirmed working, and before resource loading substantially completes --
+          # a client that crashes moments after printing one of those would still false-positive.
+          # Require the real, LATE, unambiguous marker this repo's own CI run 44338887069 actually
+          # produced: texture-atlas stitching only happens after a working GL context has loaded
+          # and bound real textures, which is well past the point any GL-init failure would have
+          # already aborted the process.
+          marker='[minecraft/TextureAtlas]: Created:'
+          if grep -qF "$marker" client-boot.log; then
+            echo "confirmed: a real NeoForge dev client reached genuine post-GL-init startup under Xvfb on this runner (found '$marker')"
+            grep -F "$marker" client-boot.log
           else
-            echo "::error::no real post-GL-init client startup evidence found -- headless client boot is NOT currently feasible on this runner; see client-boot.log for the actual failure"
+            echo "::error::no real post-GL-init client startup evidence found ('$marker' not present) -- headless client boot is NOT currently feasible on this runner; see client-boot.log for the actual failure"
             tail -n 100 client-boot.log
             exit 1
           fi
