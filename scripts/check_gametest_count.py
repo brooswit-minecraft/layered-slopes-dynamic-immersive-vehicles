@@ -6,20 +6,23 @@ or ran zero tests, so a green `./gradlew runGameTestServer` exit code alone
 proves nothing. This checks the run's own log for unambiguous evidence: the
 server must not have failed to start, there must be no reported
 required-test failures, and the completed/passed counts must both exactly
-equal the number of acceptance tests this mod declares (MINECRAFT-513).
+equal the number of acceptance tests this mod declares (MINECRAFT-510).
 
-Adapted verbatim from layered-slopes' own guard (MINECRAFT-499), which
-confirmed this log format against a real CI run: passing tests are only
-ever counted, never individually named, so only the completion/pass summary
-counts -- not a per-test-name substring check -- can work here.
+Adapted from layered-slopes' own guard (MINECRAFT-499), which confirmed this
+log format against a real CI run: passing tests are only ever counted, never
+individually named, so only the completion/pass summary counts -- not a
+per-test-name substring check -- can work here.
 
 NOT YET WIRED INTO ci.yml: this mod (MINECRAFT-510) has zero GameTests as of
 this slice -- `./gradlew runGameTestServer` here currently fails to start
-with "No test functions were given!" (confirmed live), which this script
-would correctly treat as a failure, not a 0-test pass. Wire this in once the
-first real GameTest exists, with EXPECTED_REQUIRED_TEST_COUNT set to the
-real count at that point -- the value below is an unused placeholder until
-then, not a claim about this mod's current test count.
+with "No test functions were given!" (confirmed live). EXPECTED_REQUIRED_TEST_COUNT
+is the UNSET sentinel below, not a borrowed number or a 0 that a genuine
+0-test log could satisfy: main() refuses to run at all while it is UNSET,
+the same fail-closed-on-an-unfilled-placeholder shape build.gradle's
+download tasks use for an unfilled "UNRELEASED" dependency pin. Wire this
+into ci.yml, and set EXPECTED_REQUIRED_TEST_COUNT to the real count, once
+the first real GameTest for this mod actually exists -- never copy a
+sibling mod's count or test-name list into this file again.
 """
 import re
 import sys
@@ -30,28 +33,20 @@ class RuntimeEvidenceError(ValueError):
     """The GameTest log cannot prove a complete, non-trivial run."""
 
 
-# flowingWaterBesideAFullBlock.../flowingWaterOverTheLastLayer.../stationarySourceWater.../
-# stationarySettledPartialWater.../anAdvancingPartialWater.../aFullNonSourceFallingColumn.../
-# aManualSourceCellChangeNeverErodesRegardlessOfFlowingFluids.../
-# anUnrelatedNeighborNotificationDoesNotMarkAnotherPositionAsRecentlyChanged.../
-# realFlowingWaterAdvancesAndErodesWhatItTouches.../
-# aRealFlowingFluidsDrivenFullCellErodesThenSettlesToNoOp.../
-# aDisabledFlowingFluidsNeverGovernsWater.../anIgnoredFluidIsNeverGoverned.../
-# aManualReplaceAfterARealTransferImmediatelyClearsTheStaleRecord.../
-# aRandomLevelingTransferIsVerifiedByRecentFlowActivity.../
-# aLeakedLevelingDepthIsBoundedByThePerTickSafetyNet.../
-# aPositionAlreadyVisitedThisSecond.../
-# chanceScaleZeroDisablesAnOtherwiseGuaranteedAttempt.../aResistedRoll.../
-# aCancelledProtectionHook.../erodingAFullGrassBlock.../
-# aVanillaFactoryConstructedFullStateIsSourceAndErodesNothing.../
-# aVanillaFactoryConstructedPartialStateIsFlowingAndErodes... (same count expected whether or
-# not -PcoinstallFlowingFluids=true additionally loads the real Flowing Fluids mod: these tests
-# erode via whichever real engine's own physics is actually active, never by assuming which one;
-# see FlowingFluidErosionGameTests)
-EXPECTED_REQUIRED_TEST_COUNT = 22
+UNSET = "UNSET"
+
+# No GameTest exists for this mod yet, so there is no real count to check against -- UNSET is a
+# sentinel, not a count, and main() refuses to run while it is UNSET (see below). Update to the
+# real count -- never a borrowed one -- when the first GameTest is added, and wire this script
+# into ci.yml at the same time.
+EXPECTED_REQUIRED_TEST_COUNT = UNSET
 
 
 def verify_runtime_log(log_text):
+    if EXPECTED_REQUIRED_TEST_COUNT == UNSET:
+        raise RuntimeEvidenceError(
+            "EXPECTED_REQUIRED_TEST_COUNT is still UNSET -- this mod has no GameTests yet; "
+            "set it to the real count once the first one is added, don't borrow one")
     if re.search(r"Failed to start the minecraft server", log_text, re.I):
         raise RuntimeEvidenceError("GameTest server startup failed")
     if re.search(r"\b\d+\s+required tests failed\b", log_text):

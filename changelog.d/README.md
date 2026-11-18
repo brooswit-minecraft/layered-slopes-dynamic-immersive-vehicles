@@ -10,16 +10,24 @@ conflict this scheme exists to remove.
 
 The PR-time `release-gate` CI check only validates that a gated PR added a
 fragment and that its `bump:`/`### BREAKING` rules are consistent — it does
-not write anything. Separately, `.github/workflows/release.yml` runs on
-every push to `main`: it looks for fragments added since the latest
-`vX.Y.Z` git tag reachable from that commit, computes the next version from
-their highest `bump:` level, and tags + publishes a GitHub release. It does
-**not** bump `version=` in `gradle.properties`, does **not** add a dated
-heading to `CHANGELOG.md`, and does **not** delete the fragments —
-fragments simply accumulate in git history; the tag is the record of what
-has already shipped, not the fragment set. **Do not** bump the version file
-or add a dated CHANGELOG heading yourself — nothing in this workflow reads
-either, and the release's actual notes come from the fragments themselves.
+not write anything. In every sibling compat mod, a separate
+`.github/workflows/release.yml` runs on every push to `main`: it looks for
+fragments added since the latest `vX.Y.Z` git tag reachable from that
+commit, computes the next version from their highest `bump:` level, and
+tags + publishes a GitHub release.
+
+**This repo does not have that workflow yet** (MINECRAFT-510 review:
+auto-publishing on main push is an unauthorized release/install side effect
+for a ticket explicitly scoped to implementation, not release). Fragments
+accumulate here in the meantime with no automated consumer; add
+`release.yml` -- mirroring a sibling repo's copy exactly -- only once an
+actual release is explicitly authorized. When it exists, it will **not**
+bump `version=` in `gradle.properties`, will **not** add a dated heading to
+`CHANGELOG.md`, and will **not** delete the fragments — fragments simply
+accumulate in git history; the tag is the record of what has already
+shipped, not the fragment set. **Do not** bump the version file or add a
+dated CHANGELOG heading yourself regardless — nothing reads either, and a
+release's actual notes come from the fragments themselves.
 
 ## Format
 
