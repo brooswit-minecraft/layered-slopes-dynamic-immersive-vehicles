@@ -257,7 +257,7 @@ This is a bounded, multi-slice implementation. Current slice:
       head `a68999c`: server log reports `outcome=PROTECTED`, and the already-connected client's
       own probe independently observed both endpoints genuinely unchanged
       (`minecraft:dirt`/`minecraft:air`).
-- [x] Multiplayer client-sync acceptance (direction, comment 55159/55161): two new opt-in
+- [ ] Multiplayer client-sync acceptance (direction, comment 55159/55161): two new opt-in
       workflows, `client-sync-acceptance-multiplayer-enabled.yml` and
       `client-sync-acceptance-multiplayer-rejected.yml`, boot TWO genuinely distinct,
       concurrently-connected client identities (different offline-mode usernames/UUIDs) against
@@ -271,12 +271,14 @@ This is a bounded, multi-slice implementation. Current slice:
       footgun where a bare failing `grep -c` assignment silently aborted the whole script with no
       output; a genuine race in `ErosionClientSyncLiveProbe` (no settle delay before trusting a
       baseline read, exposed by two client JVMs contending for CPU) -- fixed with the same
-      settle-then-read discipline `ErosionClientSyncProbe` already used; and a review finding
-      that the settle-tick counter was not reset on an intervening tracking gap, so it did not
-      actually enforce consecutive tracked ticks as claimed -- fixed to reset on any gap. CI-verified: both clients independently report
-      `CHANGED`/`dynamicterrain:layered_dirt` 15+1, and both independently report `UNCHANGED`/
-      `minecraft:dirt`/`minecraft:air` with the server's own `/list` showing both identities
-      concurrently connected.
+      settle-then-read discipline `ErosionClientSyncProbe` already used; a review finding that
+      the settle-tick counter was not reset on an intervening tracking gap, so it did not
+      actually enforce consecutive tracked ticks as claimed -- fixed to reset on any gap; and an
+      LWJGL native-library crash from two concurrent first-time Gradle dependency resolutions
+      racing over the shared cache -- fixed by staggering the client launches (client B does not
+      start until client A's one-time resolution has finished) rather than isolating caches
+      (which just traded the race for a cold-cache timeout). Implemented; CI re-verification of
+      the staggered-launch fix pending.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
       above), and gameplay acceptance evidence.

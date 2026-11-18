@@ -147,10 +147,20 @@ jobs:
           # ("Platform/architecture mismatch", UnsatisfiedLinkError on liblwjgl_stb.so) while
           # client B booted fine from the same commit -- consistent with two concurrent Gradle
           # processes racing over the shared GRADLE_USER_HOME cache during first-time native
-          # extraction. Give client B its own isolated cache so it cannot race with client A's
-          # (which keeps using the shared, pre-warmed cache from actions/setup-java above).
+          # extraction. A separate isolated-GRADLE_USER_HOME fix for client B then blew the
+          # client timeout on a cold cache (a fresh ~790MB download). The real fix: stagger the
+          # launch so client B does not start its own first-time dependency/native resolution
+          # until client A's (the one that actually does the heavy one-time work against the
+          # shared cache) has already finished -- both keep the SAME shared, pre-warmed cache,
+          # so no race and no cold-cache cost for either. "Concurrently connected" only needs to
+          # hold during the observation window around the forced attempt, not at JVM start.
+          for i in $(seq 1 90); do
+            grep -qF 'Loaded 0 entity animations' client-side-a/client-boot.log 2>/dev/null && break
+            sleep 2
+          done
+
           cd client-side-b
-          DISPLAY=:98 GRADLE_USER_HOME="$(pwd)/.gradle-home" timeout 600 ./gradlew runClient --no-daemon \
+          DISPLAY=:98 timeout 600 ./gradlew runClient --no-daemon \
               -PerosionClientSyncLiveProbe=true \
               -PerosionClientSyncQuickPlay=localhost:25581 \
               -PerosionClientSyncUsername=DevSecond \
@@ -162,10 +172,8 @@ jobs:
           client_b_pid=$!
           cd ..
 
-          for i in $(seq 1 30); do
-            grep -qF 'Loaded 0 entity animations' client-side-a/client-boot.log 2>/dev/null \
-              && grep -qF 'Loaded 0 entity animations' client-side-b/client-boot.log 2>/dev/null \
-              && break
+          for i in $(seq 1 60); do
+            grep -qF 'Loaded 0 entity animations' client-side-b/client-boot.log 2>/dev/null && break
             sleep 2
           done
           # Dismiss vanilla's first-run accessibility/narrator onboarding dialog on both displays

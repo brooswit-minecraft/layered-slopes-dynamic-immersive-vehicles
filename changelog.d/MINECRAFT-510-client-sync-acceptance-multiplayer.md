@@ -42,6 +42,10 @@ bump: minor
 - Fixed an intermittent CI failure where client A crashed outright with an LWJGL native-library
   `UnsatisfiedLinkError` ("Platform/architecture mismatch") while client B booted fine from the
   same commit -- consistent with the two concurrent `./gradlew runClient` processes racing over
-  the shared `GRADLE_USER_HOME` cache during first-time native-library extraction. Client B now
-  uses its own isolated Gradle user home so the two processes cannot race; client A keeps using
-  the shared, pre-warmed cache.
+  the shared `GRADLE_USER_HOME` cache during first-time native-library extraction. A first fix
+  attempt (isolating client B's Gradle user home) traded the race for a reliable client-timeout
+  failure, since that forced a cold ~790MB re-download every run. The actual fix: stagger the
+  launch so client B's own first-time dependency/native resolution does not start until client
+  A's has already finished (both keep the SAME shared, pre-warmed cache, so there is nothing left
+  to race over, and no cold-cache cost for either side) -- "concurrently connected" only needs to
+  hold during the observation window around the forced attempt, not at JVM start.
