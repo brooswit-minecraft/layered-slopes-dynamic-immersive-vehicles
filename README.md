@@ -226,31 +226,37 @@ This is a bounded, multi-slice implementation. Current slice:
       conservation `ErosionAttemptGameTests` already proves in isolation, now proven live from an
       actual connected client's own perspective, using the exact same deterministic block
       arrangement and `GUARANTEED_CHANCE_CONFIG` values.
-- [ ] Client-sync acceptance, rejected/canceled-unchanged case, with LIVE post-join evidence
+- [x] Client-sync acceptance, rejected/canceled-unchanged case, with LIVE post-join evidence
       (direction, comment 55058/55111/55114/55137): a third opt-in
       `client-sync-acceptance-rejected.yml` workflow completes the pair -- a REAL, SPECIFIC
       denial (never merely the absence of a mutation, and
       never `NO_CHANCE`/a dropped command/a pre-attempt timeout/a disconnected client standing in
       for it). Uses a real vanilla mechanism, not a mock: the world border, shrunk via
       `/worldborder` so its own real max coordinate falls exactly between the source and
-      destination positions (verified with real arithmetic in the workflow, not merely described
-      in a comment), exercising `ClaimProtection#mayMutate`'s own unconditional world-border check
-      (no FakePlayer involved, unlike spawn protection, which NeoForge's FakePlayer evidently
-      bypasses) -- using the exact same guaranteed-chance config as the enabled case, so the only
-      possible denial reason is this real protection check, requiring the server to report the
-      specific `outcome=PROTECTED`. `ErosionClientSyncLiveProbe` now supports an explicit
-      test-only acknowledge-file signal: the workflow writes it only after independently
-      confirming the real denial in the server's own log, and the already-connected client
-      requires that file before starting a further bounded post-acknowledgment watch window --
-      structurally ruling out a delayed harness letting the client's own timer expire before the
-      attempt even ran and still passing for the wrong reason (review finding 55137); a timeout
-      with the acknowledge file never seen reports the distinct `TIMEOUT_NO_ACK` status, never
-      folded into `UNCHANGED`. Implemented; not yet CI-verified at the current head -- a review
-      finding caught that the prior `source<=max`/`dest>max` comparison did not match
-      `WorldBorder#isWithinBounds`'s real strict-upper-bound semantics (`x >= min && x < max`),
-      putting both positions outside the border instead of isolating only the destination; fixed
-      by moving the source/destination pair to x=89/90 and correcting the inequality checks, CI
-      re-run pending.
+      destination positions (verified with real arithmetic matching
+      `WorldBorder#isWithinBounds`'s real strict-upper-bound semantics, `x >= min && x < max`, not
+      merely described or assumed in a comment), exercising `ClaimProtection#mayMutate`'s own
+      unconditional world-border check (no FakePlayer involved, unlike spawn protection, which
+      NeoForge's FakePlayer evidently bypasses) -- using the exact same guaranteed-chance config
+      as the enabled case, so the only possible denial reason is this real protection check,
+      requiring the server to report the specific `outcome=PROTECTED`. Two real bugs surfaced and
+      were fixed during CI iteration, not merely assumed correct: the checked inequality
+      originally used `source<=max`/`dest>max` (not matching the real strict `<` upper bound,
+      which put both the source and destination outside the border instead of isolating only the
+      destination -- fixed by moving the pair to x=89/90 with corrected inequalities), and
+      `/worldborder center 0 0` turned out to not center at exactly `(0, 0)` -- vanilla's
+      `Vec2Argument`/`WorldCoordinate#parseDouble` adds `+0.5` to a bare-integer coordinate with
+      no decimal point, confirmed live by the server's own log; fixed by sending explicit decimals
+      (`0.0 0.0`). `ErosionClientSyncLiveProbe` supports an explicit test-only acknowledge-file
+      signal: the workflow writes it only after independently confirming the real denial in the
+      server's own log, and the already-connected client requires that file before starting a
+      further bounded post-acknowledgment watch window -- structurally ruling out a delayed
+      harness letting the client's own timer expire before the attempt even ran and still passing
+      for the wrong reason (review finding 55137); a timeout with the acknowledge file never seen
+      reports the distinct `TIMEOUT_NO_ACK` status, never folded into `UNCHANGED`. CI-verified at
+      head `a68999c`: server log reports `outcome=PROTECTED`, and the already-connected client's
+      own probe independently observed both endpoints genuinely unchanged
+      (`minecraft:dirt`/`minecraft:air`).
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
       above), multiplayer sync, and gameplay acceptance evidence.
