@@ -39,3 +39,9 @@ bump: minor
 - Review finding on that fix: the settle-tick counter was not reset when an intervening tick
   found the chunk no longer tracked, so it accumulated a cumulative total rather than actually
   enforcing consecutive tracked ticks as claimed. Fixed to reset the counter on any such gap.
+- Fixed an intermittent CI failure where client A crashed outright with an LWJGL native-library
+  `UnsatisfiedLinkError` ("Platform/architecture mismatch") while client B booted fine from the
+  same commit -- consistent with the two concurrent `./gradlew runClient` processes racing over
+  the shared `GRADLE_USER_HOME` cache during first-time native-library extraction. Client B now
+  uses its own isolated Gradle user home so the two processes cannot race; client A keeps using
+  the shared, pre-warmed cache.
