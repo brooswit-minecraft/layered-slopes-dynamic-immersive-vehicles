@@ -13,11 +13,13 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * One per-wheel, per-tick erosion attempt at a single block position: dedup, the accepted
- * MINECRAFT-555 slip-to-probability roll, a shuffled-direction-first-accepted
- * {@code Smoothing.canSmooth}/{@code smooth} call (555 prep packet 54611 acceptance matrix cases
- * 6/7/10/13/14), a real claim/protection check at both ends ({@link ClaimProtection}), and a real
- * Dynamic-Terrain-cave-in-risk check ({@link DynamicTerrainCaveInRisk}) before any world mutation.
+ * One per-wheel, per-tick erosion attempt at a single block position: a mandatory, unconditional
+ * {@link ErosionConfig#erosionEnabled()} gate (default OFF, direction comment 54943) before
+ * anything else, then dedup, the accepted MINECRAFT-555 slip-to-probability roll, a
+ * shuffled-direction-first-accepted {@code Smoothing.canSmooth}/{@code smooth} call (555 prep
+ * packet 54611 acceptance matrix cases 6/7/10/13/14), a real claim/protection check at both ends
+ * ({@link ClaimProtection}), and a real Dynamic-Terrain-cave-in-risk check
+ * ({@link DynamicTerrainCaveInRisk}) before any world mutation.
  *
  * <p>Taking {@link ServerLevel} rather than the generic {@code Level} makes a client-side call
  * impossible to even construct, not merely checked at runtime -- but it does NOT by itself rule
@@ -49,6 +51,11 @@ public final class ErosionAttempt {
 
     /** Why a given attempt did or did not mutate the world. */
     public enum Outcome {
+        /**
+         * {@link ErosionConfig#erosionEnabled()} is {@code false} -- denied before touching the
+         * thread check, chunk, dedup, RNG, or world at all (direction, comment 54943).
+         */
+        DISABLED,
         /** the calling thread is not the server's own thread -- denied before touching anything. */
         OFF_THREAD,
         /** case 10: the source position's chunk is not loaded -- never force-load it. */
@@ -123,6 +130,9 @@ public final class ErosionAttempt {
      */
     static Outcome attempt(ServerLevel level, BlockPos pos, double slipSpeedMs, double wheelLoadKg,
                             RandomSource random, ErosionConfig config, ErosionDedup dedup, Hooks hooks) {
+        if (!config.erosionEnabled()) {
+            return Outcome.DISABLED;
+        }
         if (!level.getServer().isSameThread()) {
             return Outcome.OFF_THREAD;
         }
