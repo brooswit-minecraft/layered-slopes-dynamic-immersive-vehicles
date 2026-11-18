@@ -55,39 +55,50 @@ This is a bounded, multi-slice implementation. Current slice:
       - `ClaimProtection`: the same real, already-accepted pattern
         [`layered-slopes-flowing-fluids`' `Protection.mayErode`](https://github.com/brooswit-minecraft/layered-slopes-flowing-fluids/blob/main/src/main/java/io/github/brooswitminecraft/layeredslopesflowingfluids/Protection.java)
         uses: post a real `BlockEvent.BreakEvent` through a fake player and honor cancellation,
-        applied at both source and destination. Best-effort (covers protection mods that listen
-        on `BreakEvent`), not a guarantee against every possible hook.
-      - `DynamicTerrainCaveInRisk`: a real, bounded check for the one concretely-named external
-        propagation risk reviews identified -- Dynamic Terrain's cave-ins. Verified directly
-        against DT's source: cave-ins only fire via `BlockEvent.NeighborNotifyEvent` (which
-        `Smoothing.smooth()`'s `Block.UPDATE_ALL` does trigger) and only act on blocks in DT's own
-        `dynamicterrain:supported` block tag -- checked directly, this tag does not include any
-        `layeredslopes:*` block, so once erosion converts a block it is never itself cave-in-
-        reactive, but an unrelated DT-tagged neighbor face-adjacent to source/destination could
-        still be. This check denies conservatively whenever such a neighbor exists (data-only: it
-        reads DT's mod id and tag id as strings, never DT's Java classes, the same optional-
-        dependency shape `GroundSurfaces.java` already uses for Layered Slopes). If DT is not
-        loaded, there is no such risk to check.
+        applied at both source and destination -- plus the server's own applicable built-in
+        constraints a `BreakEvent` check alone does not establish: the world border
+        (`ServerLevel#getWorldBorder()`) and spawn protection
+        (`MinecraftServer#isUnderSpawnProtection`). Best-effort for third-party claim mods (covers
+        ones that listen on `BreakEvent`), not a guarantee against every possible hook; a preflight
+        check only, and explicitly not a claim of placement-hook-equivalent semantics at the
+        destination.
+      - `DynamicTerrainCaveInRisk`: Dynamic Terrain's cave-ins are the one concretely-named
+        external propagation risk reviews identified. An earlier, narrower version of this check
+        tried to exclude source/destination from a face-adjacent-neighbor tag scan on the theory
+        that they become untagged `layeredslopes:*` blocks -- review 54907/54908 found that rested
+        on today's shipped tag contents and today's call ordering, either of which a runtime
+        datapack or mod update could change, and that it treated an unloaded neighbor as
+        proven-safe rather than unknown. Rather than keep refining an increasingly fragile
+        exclusion rule, this now makes the one claim it can fully verify: if Dynamic Terrain is
+        loaded at all, every attempt is denied (reads only DT's mod id as data, never its Java
+        classes, the same optional-dependency shape `GroundSurfaces.java` already uses for Layered
+        Slopes). If DT is not loaded, there is no such risk.
       `ErosionAttempt`'s production path is: dedup claim, the accepted MINECRAFT-555
       slip-to-probability roll, a shuffled-direction-first-`canSmooth`-accepted candidate, both
-      real checks above at that candidate's source and destination, then `Smoothing.smooth()`.
-      Takes a `ServerLevel` (a client-side call cannot even be constructed) and asserts
-      `level.getServer().isSameThread()` before touching anything -- the type alone does not rule
-      out an off-thread call. Derives dimension/tick from the level/its server, never from a
-      caller-supplied value; every candidate position's chunk is confirmed loaded before any
-      block query, never force-loading one. Takes slip/load telemetry as plain parameters; makes
-      no assumption about where it comes from, since DIV's own per-wheel contact-telemetry seam
-      is not wired in yet (see below). `ErosionAttemptGameTests` (11 cases) prove this against a
-      real world: a real move applying and conserving material with no claim mod/Dynamic Terrain
-      installed (the "missing/unsupported integration" success case), a protected source, a
-      protected destination, and a detected cave-in risk each denying, per-tick dedup, a denied
-      attempt and a failed roll each still consuming the dedup slot, no-valid-direction, an
-      off-thread call denied (bounded join with safe worker interrupt/cleanup on timeout) before
-      touching anything, an unloaded source denied without force-loading it, and a deterministic
-      instrumented-seam test proving `Smoothing.canSmooth` itself is never even queried for an
-      unloaded destination -- not just "no mutation happened," which a reordered implementation
-      could still satisfy; verified by temporarily reordering the production check, confirming
-      the test fails, then reverting.
+      real checks above at that candidate's source and destination, a re-verified `canSmooth`
+      (a synchronous `ClaimProtection` listener could have mutated the world as a side effect;
+      `Smoothing.smooth()` itself also re-derives and compares its own plan before applying, per
+      grading's existing TOCTOU fix, so this is defense in depth, not the only safety net), then
+      `Smoothing.smooth()`. Takes a `ServerLevel` (a client-side call cannot even be constructed)
+      and asserts `level.getServer().isSameThread()` before touching anything -- the type alone
+      does not rule out an off-thread call. Derives dimension/tick from the level/its server,
+      never from a caller-supplied value; every candidate position's chunk is confirmed loaded
+      before any block query, never force-loading one. Takes slip/load telemetry as plain
+      parameters; makes no assumption about where it comes from, since DIV's own per-wheel
+      contact-telemetry seam is not wired in yet (see below). `ErosionAttemptGameTests` (14 cases)
+      prove this against a real world: a real move applying and conserving material with no
+      claim mod/Dynamic Terrain installed (the "missing/unsupported integration" success case), a
+      protected source, a protected destination, and a detected cave-in risk each denying (via
+      injected orchestration-seam fakes), a REAL `BlockEvent.BreakEvent` listener cancelling at
+      source and at destination each denying via the actual production path, a direct check that
+      the real `DynamicTerrainCaveInRisk` reports no risk when Dynamic Terrain is genuinely
+      absent, per-tick dedup, a denied attempt and a failed roll each still consuming the dedup
+      slot, no-valid-direction, an off-thread call denied (bounded join with safe worker
+      interrupt/cleanup on timeout) before touching anything, an unloaded source denied without
+      force-loading it, and a deterministic instrumented-seam test proving `Smoothing.canSmooth`
+      itself is never even queried for an unloaded destination -- not just "no mutation
+      happened," which a reordered implementation could still satisfy; verified by temporarily
+      reordering the production check, confirming the test fails, then reverting.
 - [x] `ErosionProtectionGate`/`ProtectionAdapter` (merged PR #3) remains in the codebase, valid on
       its own terms, but is no longer part of `ErosionAttempt`'s real path for the reason above --
       its Minecraft-free abstraction cannot host a real world-aware check.
@@ -116,7 +127,7 @@ they are plain JUnit 5 tests with no Minecraft/NeoForge dependency.
 ```
 
 Boots a real dedicated server with this mod, `layered-slopes`, and `layered-slope-grading`
-installed and runs the 12 GameTests (boot-only, plus `ErosionAttemptGameTests`' 11 real-world
+installed and runs the 15 GameTests (boot-only, plus `ErosionAttemptGameTests`' 14 real-world
 orchestration cases). Wired into CI via `scripts/check_gametest_count.py`, which fails closed if
 the expected test count regresses. An opt-in `div-paired-runtime.yml` workflow additionally
 builds DIV fresh and boots everything together at DIV's real NeoForge floor.

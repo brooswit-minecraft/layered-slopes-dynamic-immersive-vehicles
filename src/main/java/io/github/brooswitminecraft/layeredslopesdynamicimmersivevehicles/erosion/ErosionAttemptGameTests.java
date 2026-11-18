@@ -387,4 +387,98 @@ public final class ErosionAttemptGameTests {
                         + "a real mutation here would prove the loaded check was skipped or misordered");
         helper.succeed();
     }
+
+    /**
+     * Regression (review 54907/54908 point 4): the earlier {@code aProtectedSourceDeniesEvenWhen...}
+     * test only proves {@code ErosionAttempt}'s own orchestration respects an injected fake
+     * {@code ClaimCheck} -- it says nothing about whether {@link ClaimProtection} itself actually
+     * gets real coverage from a real NeoForge listener. This test uses the production
+     * {@code attempt()} overload (real {@link ClaimProtection}, real {@link
+     * DynamicTerrainCaveInRisk}) and registers a genuine {@code BlockEvent.BreakEvent} listener
+     * that cancels at the source position.
+     */
+    @GameTest(template = "flat_platform")
+    public static void aRealBreakEventListenerCancelingAtSourceIsRespectedByTheProductionPath(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 2, 1);
+        placeSourceWithOneValidEastNeighbor(helper, pos);
+        BlockState before = helper.getBlockState(pos);
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos absolutePos = helper.absolutePos(pos);
+
+        Object denyAtSource = new Object() {
+            @net.neoforged.bus.api.SubscribeEvent
+            public void onBreak(net.neoforged.neoforge.event.level.BlockEvent.BreakEvent event) {
+                if (event.getPos().equals(absolutePos)) {
+                    event.setCanceled(true);
+                }
+            }
+        };
+        net.neoforged.neoforge.common.NeoForge.EVENT_BUS.register(denyAtSource);
+        ErosionAttempt.Outcome outcome;
+        try {
+            outcome = ErosionAttempt.attempt(level, absolutePos,
+                    SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
+                    GUARANTEED_CHANCE_CONFIG, new ErosionDedup());
+        } finally {
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.unregister(denyAtSource);
+        }
+
+        helper.assertTrue(outcome == ErosionAttempt.Outcome.PROTECTED,
+                "a real BreakEvent listener cancelling at source must deny via the production path, got " + outcome);
+        helper.assertTrue(helper.getBlockState(pos).equals(before), "the world must stay unmutated");
+        helper.succeed();
+    }
+
+    /** Same as above, but the real listener cancels at the DESTINATION position instead. */
+    @GameTest(template = "flat_platform")
+    public static void aRealBreakEventListenerCancelingAtDestinationIsRespectedByTheProductionPath(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 2, 1);
+        BlockPos eastDestination = pos.relative(Direction.EAST);
+        placeSourceWithOneValidEastNeighbor(helper, pos);
+        BlockState before = helper.getBlockState(pos);
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos absolutePos = helper.absolutePos(pos);
+        BlockPos absoluteDestination = helper.absolutePos(eastDestination);
+
+        Object denyAtDestination = new Object() {
+            @net.neoforged.bus.api.SubscribeEvent
+            public void onBreak(net.neoforged.neoforge.event.level.BlockEvent.BreakEvent event) {
+                if (event.getPos().equals(absoluteDestination)) {
+                    event.setCanceled(true);
+                }
+            }
+        };
+        net.neoforged.neoforge.common.NeoForge.EVENT_BUS.register(denyAtDestination);
+        ErosionAttempt.Outcome outcome;
+        try {
+            outcome = ErosionAttempt.attempt(level, absolutePos,
+                    SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
+                    GUARANTEED_CHANCE_CONFIG, new ErosionDedup());
+        } finally {
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.unregister(denyAtDestination);
+        }
+
+        helper.assertTrue(outcome == ErosionAttempt.Outcome.PROTECTED,
+                "a real BreakEvent listener cancelling at destination must deny via the production path, got " + outcome);
+        helper.assertTrue(helper.getBlockState(pos).equals(before), "the world must stay unmutated");
+        helper.succeed();
+    }
+
+    /**
+     * Regression (review 54907/54908 point 4): directly exercises the real {@link
+     * DynamicTerrainCaveInRisk#isPresent} (real {@code ModList} lookup, not an injected fake),
+     * confirming it correctly reports no risk when Dynamic Terrain is genuinely absent from this
+     * test environment's mod list.
+     */
+    @GameTest(template = "flat_platform")
+    public static void dynamicTerrainCaveInRiskIsFalseWhenDynamicTerrainIsNotLoaded(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 2, 1);
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos absolutePos = helper.absolutePos(pos);
+
+        boolean risk = DynamicTerrainCaveInRisk.isPresent(level, absolutePos, absolutePos.relative(Direction.EAST));
+
+        helper.assertTrue(!risk, "Dynamic Terrain is not part of this test environment's mod list, so there must be no reported risk");
+        helper.succeed();
+    }
 }

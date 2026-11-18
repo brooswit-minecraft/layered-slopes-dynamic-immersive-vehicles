@@ -4,16 +4,19 @@ bump: minor
 - `ClaimProtection`: real, best-effort respect for claim/protection mods, via the same pattern
   `layered-slopes-flowing-fluids`' own `Protection.mayErode` already uses -- post a real
   `BlockEvent.BreakEvent` through a fake player and honor cancellation, applied at both the
-  source and destination of each erosion move.
-- `DynamicTerrainCaveInRisk`: a real, bounded, conservative check for Dynamic Terrain's cave-ins
-  -- the one concretely-named external propagation risk this ticket's reviews identified.
-  Verified directly against Dynamic Terrain's source and its actual shipped block tag (not
-  assumed): cave-ins only react to blocks in `dynamicterrain:supported`, which does not include
-  any `layeredslopes:*` block, so this checks only the (up to 12) face-adjacent neighbors of
-  source/destination for that tag, reading only Dynamic Terrain's mod id and tag id as data
-  (never its Java classes).
+  source and destination of each erosion move. Also checks the server's own world border and
+  spawn protection, which `BreakEvent` cancellation alone does not establish.
+- `DynamicTerrainCaveInRisk`: a real, maximally conservative check for Dynamic Terrain's cave-ins
+  -- the one concretely-named external propagation risk this ticket's reviews identified. An
+  earlier, narrower version tried to exclude source/destination from a face-adjacent-neighbor tag
+  scan; review 54907/54908 found that rested on today's shipped tag contents and call ordering
+  (either could change) and treated an unloaded neighbor as proven-safe rather than unknown.
+  Simplified to the one claim fully verifiable and enforceable: if Dynamic Terrain is loaded at
+  all, deny every attempt (reads only its mod id as data, never its Java classes).
 - `ErosionAttempt` now enforces both checks as mandatory, unconditional steps before any
-  `Smoothing.smooth()` call -- not behind an optional, separately-installed adapter.
+  `Smoothing.smooth()` call -- not behind an optional, separately-installed adapter -- plus a
+  final re-verification of `canSmooth` immediately before applying, since a synchronous
+  `ClaimProtection` listener can mutate the world as a side effect of its own check.
 
 ### Changed
 - Withdrew the `ErosionProtectionGate`/`ProtectionAdapter`-routed design from `ErosionAttempt`'s

@@ -167,6 +167,15 @@ public final class ErosionAttempt {
                 anyCaveInRisk = true;
                 continue;
             }
+            // Re-verify feasibility (review 54907/54908): claim.mayMutate above can run a
+            // synchronous NeoForge listener that mutates the world as a side effect. Smoothing.
+            // smooth() re-derives and compares its own plan before applying (grading's own TOCTOU
+            // fix), so it cannot apply a stale plan -- but re-checking here too means a listener
+            // that invalidated this exact candidate is treated as "try the next direction"
+            // rather than silently falling through to smooth() returning false.
+            if (!hooks.canSmooth.canSmooth(level, pos, direction)) {
+                continue;
+            }
             if (Smoothing.smooth(level, pos, direction, true)) {
                 return Outcome.APPLIED;
             }
