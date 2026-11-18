@@ -101,10 +101,28 @@ jobs:
           # 6 seconds apart, and the setblock/erosionclientsynctest commands (sent only AFTER
           # detecting the join) never even appear in that server log -- they lost the race
           # entirely. Doing this before the client exists removes the race.
-          printf 'setblock 0 -59 0 minecraft:dirt\n' > server-side/stdin.pipe
-          sleep 1
+          #
+          # A subsequent run (after fixing runServer's standardInput wiring) showed the final
+          # "stop" command DOES now reach the server (real Stopping server/Saving worlds lines
+          # appeared), but setblock/erosionclientsynctest -- sent within ~1s of "Done (" --
+          # still didn't land. Gradle's own stdin-forwarding to the forked JVM appears to need a
+          # moment to actually come up after the task starts; retry with a real confirmation
+          # check (the real "Changed the block at" line vanilla's own setblock command prints)
+          # rather than guessing a fixed delay.
+          for attempt in 1 2 3 4 5; do
+            printf 'setblock 0 -59 0 minecraft:dirt\n' > server-side/stdin.pipe
+            sleep 3
+            grep -qF 'Changed the block at' server-side/server-boot.log 2>/dev/null && break
+            echo "diagnostic: setblock attempt $attempt did not land yet, retrying"
+          done
+          if ! grep -qF 'Changed the block at' server-side/server-boot.log; then
+            echo "::error::setblock never reached the server after 5 attempts -- console-command injection is not working. server-boot.log tail:"
+            tail -20 server-side/server-boot.log
+            kill -9 "$server_pid" 2>/dev/null || true
+            exit 1
+          fi
           printf 'erosionclientsynctest 0 -59 0 0 0\n' > server-side/stdin.pipe
-          sleep 1
+          sleep 3
           tail -10 server-side/server-boot.log
 
           # Run our own Xvfb on a known, fixed display (rather than xvfb-run's auto-picked one)
