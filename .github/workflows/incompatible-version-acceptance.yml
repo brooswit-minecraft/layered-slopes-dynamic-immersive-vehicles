@@ -1,0 +1,124 @@
+name: Incompatible-version acceptance (opt-in)
+
+# Opt-in: never runs on an ordinary push, and only runs on a pull_request when THIS workflow
+# file itself changed, or when build.gradle, gradle.properties, or the actual neoforge.mods.toml
+# template change (same reasoning as dependency-failure-acceptance.yml's trigger paths, review
+# 54978). Companion to dependency-failure-acceptance.yml's missing-dependency case: proves
+# NeoForge's own versionRange check actually refuses to boot, with a meaningful message citing
+# the real installed (too old) version against the real required floor, when a dependency IS
+# present but below neoforge.mods.toml's declared minimum (direction, comment 54997).
+#
+# Uses the same log-content-not-exit-code discipline dependency-failure-acceptance.yml's own
+# first real run established: Gradle's runGameTestServer can report BUILD SUCCESSFUL even when
+# the launched dedicated server itself fails to load a mod, so this never branches on
+# `./gradlew`'s own exit code.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/incompatible-version-acceptance.yml'
+      - 'build.gradle'
+      - 'gradle.properties'
+      - 'src/main/templates/META-INF/neoforge.mods.toml'
+
+permissions:
+  contents: read
+
+jobs:
+  incompatible-layeredslopes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Boot with a real, pinned layeredslopes v0.1.0 -- below the required [0.2.0,) floor
+        run: |
+          set -o pipefail
+          ./gradlew runGameTestServer --no-daemon -PincompatibleVersionDependency=layeredslopes \
+            2>&1 | tee incompatible-layeredslopes.log || true
+
+      - name: Verify a real ModLoadingException attributes THIS mod's own version requirement, and no tests ran
+        run: |
+          if ! grep -q 'net.neoforged.fml.ModLoadingException' incompatible-layeredslopes.log; then
+            echo "::error::expected a net.neoforged.fml.ModLoadingException -- the server either booted successfully or failed for an unrelated reason"
+            exit 1
+          fi
+          if ! grep -q 'Mod layeredslopesdynamicimmersivevehicles requires layeredslopes 0.2.0 or above' incompatible-layeredslopes.log; then
+            echo "::error::the ModLoadingException is present, but no line attributes THIS mod's own version requirement on layeredslopes"
+            exit 1
+          fi
+          # The real too-old version must be named -- not just "not installed" (that's the
+          # missing-dependency case this workflow does NOT exercise).
+          if ! grep -q '0\.1\.0' incompatible-layeredslopes.log; then
+            echo "::error::expected the real installed version 0.1.0 to be named somewhere in the failure evidence"
+            exit 1
+          fi
+          if grep -q 'Currently, layeredslopes is not installed' incompatible-layeredslopes.log; then
+            echo "::error::found the 'not installed' message -- this is the missing-dependency case, not the incompatible-version case this workflow is meant to prove"
+            exit 1
+          fi
+          if grep -q 'GAME TESTS COMPLETE' incompatible-layeredslopes.log; then
+            echo "::error::found a GAME TESTS COMPLETE line -- the server ran tests despite the incompatible dependency version, this is not the failure this check expects"
+            exit 1
+          fi
+          echo "confirmed: a real ModLoadingException attributes THIS mod's own version requirement on layeredslopes, names the real installed 0.1.0, and no GameTest ever ran"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: incompatible-layeredslopes-evidence
+          path: incompatible-layeredslopes.log
+          if-no-files-found: warn
+
+  incompatible-layeredslopegrading:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Boot with a real, pinned layeredslopegrading v0.1.0 -- below the required [0.2.0,) floor
+        run: |
+          set -o pipefail
+          ./gradlew runGameTestServer --no-daemon -PincompatibleVersionDependency=layeredslopegrading \
+            2>&1 | tee incompatible-layeredslopegrading.log || true
+
+      - name: Verify a real ModLoadingException attributes THIS mod's own version requirement, and no tests ran
+        run: |
+          if ! grep -q 'net.neoforged.fml.ModLoadingException' incompatible-layeredslopegrading.log; then
+            echo "::error::expected a net.neoforged.fml.ModLoadingException -- the server either booted successfully or failed for an unrelated reason"
+            exit 1
+          fi
+          if ! grep -q 'Mod layeredslopesdynamicimmersivevehicles requires layeredslopegrading 0.2.0 or above' incompatible-layeredslopegrading.log; then
+            echo "::error::the ModLoadingException is present, but no line attributes THIS mod's own version requirement on layeredslopegrading"
+            exit 1
+          fi
+          if ! grep -q '0\.1\.0' incompatible-layeredslopegrading.log; then
+            echo "::error::expected the real installed version 0.1.0 to be named somewhere in the failure evidence"
+            exit 1
+          fi
+          if grep -q 'Currently, layeredslopegrading is not installed' incompatible-layeredslopegrading.log; then
+            echo "::error::found the 'not installed' message -- this is the missing-dependency case, not the incompatible-version case this workflow is meant to prove"
+            exit 1
+          fi
+          if grep -q 'GAME TESTS COMPLETE' incompatible-layeredslopegrading.log; then
+            echo "::error::found a GAME TESTS COMPLETE line -- the server ran tests despite the incompatible dependency version, this is not the failure this check expects"
+            exit 1
+          fi
+          echo "confirmed: a real ModLoadingException attributes THIS mod's own version requirement on layeredslopegrading, names the real installed 0.1.0, and no GameTest ever ran"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: incompatible-layeredslopegrading-evidence
+          path: incompatible-layeredslopegrading.log
+          if-no-files-found: warn

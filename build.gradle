@@ -129,6 +129,60 @@ tasks.register("downloadLayeredSlopeGrading") {
 // set for an ordinary build.
 def omitRequiredDependency = findProperty("omitRequiredDependency")
 
+// Opt-in incompatible-version dependency acceptance (direction, comment 54997): proves
+// NeoForge's own versionRange check actually refuses to boot, with a meaningful message citing
+// the real installed (too old) version against the real required floor, when a dependency IS
+// present but below neoforge.mods.toml's declared minimum -- the companion case to the
+// missing-dependency acceptance above, which only covers fully absent. `-PincompatibleVersion
+// Dependency=<modid>` (layeredslopes or layeredslopegrading) swaps ONLY that jar's runtimeOnly
+// entry for a real, pinned, sha512-verified v0.1.0 release -- genuinely below the
+// `versionRange="[0.2.0,)"` floor neoforge.mods.toml declares for both -- while compileOnly
+// stays on the normal, current, compatible jar so main code still compiles against it. Never
+// set for an ordinary build.
+def incompatibleVersionDependency = findProperty("incompatibleVersionDependency")
+def incompatibleLayeredSlopesVersion = "0.1.0"
+def incompatibleLayeredSlopesSha512 = "5f82da46a30aad20763491a498c7d2959e4dd5449bbbce738f2168161669e5f0f59a8bef8c190e78c99eba44fc03068175e28a0d2c5329078eddfe34cad81e33"
+def incompatibleLayeredSlopesJar =
+        layout.buildDirectory.file("incompatible/layeredslopes-${incompatibleLayeredSlopesVersion}.jar")
+def incompatibleLayeredSlopeGradingVersion = "0.1.0"
+def incompatibleLayeredSlopeGradingSha512 = "06fecdeae37f5ce3de90dba56fde93e28beb886c0edb3b7c9c49d6957593ec176bacfa150f5f4dc06ad4d13ed23b46024e94d442beb1a7edf7049f79d372bb02"
+def incompatibleLayeredSlopeGradingJar =
+        layout.buildDirectory.file("incompatible/layeredslopegrading-${incompatibleLayeredSlopeGradingVersion}.jar")
+if (incompatibleVersionDependency == "layeredslopes") {
+    tasks.register("downloadIncompatibleLayeredSlopes") {
+        outputs.file(incompatibleLayeredSlopesJar)
+        doLast {
+            def target = incompatibleLayeredSlopesJar.get().asFile
+            target.parentFile.mkdirs()
+            def url = "https://github.com/brooswit-minecraft/layered-slopes/releases/download/v${incompatibleLayeredSlopesVersion}/layeredslopes-${incompatibleLayeredSlopesVersion}.jar"
+            new URL(url).withInputStream { input -> target.withOutputStream { it << input } }
+            def digest = java.security.MessageDigest.getInstance("SHA-512")
+            def actual = digest.digest(target.bytes).encodeHex().toString()
+            if (actual != incompatibleLayeredSlopesSha512) {
+                target.delete()
+                throw new GradleException("layered-slopes ${incompatibleLayeredSlopesVersion} sha512 mismatch: ${actual}")
+            }
+        }
+    }
+}
+if (incompatibleVersionDependency == "layeredslopegrading") {
+    tasks.register("downloadIncompatibleLayeredSlopeGrading") {
+        outputs.file(incompatibleLayeredSlopeGradingJar)
+        doLast {
+            def target = incompatibleLayeredSlopeGradingJar.get().asFile
+            target.parentFile.mkdirs()
+            def url = "https://github.com/brooswit-minecraft/layered-slope-grading/releases/download/v${incompatibleLayeredSlopeGradingVersion}/layeredslopegrading-${incompatibleLayeredSlopeGradingVersion}.jar"
+            new URL(url).withInputStream { input -> target.withOutputStream { it << input } }
+            def digest = java.security.MessageDigest.getInstance("SHA-512")
+            def actual = digest.digest(target.bytes).encodeHex().toString()
+            if (actual != incompatibleLayeredSlopeGradingSha512) {
+                target.delete()
+                throw new GradleException("layered-slope-grading ${incompatibleLayeredSlopeGradingVersion} sha512 mismatch: ${actual}")
+            }
+        }
+    }
+}
+
 // Opt-in paired-runtime check (MINECRAFT-510, direction 54843): DIV has no stable release to
 // pin, so there is no download-and-verify task here -- `-PdivLocalJar=<path>` (a jar built
 // fresh from DIV's own pinned commit, e.g. by the div-paired-runtime.yml workflow) is the ONLY
@@ -275,11 +329,15 @@ neoForge {
 
 dependencies {
     compileOnly files(layeredSlopesJar).builtBy(tasks.named("downloadLayeredSlopes"))
-    if (omitRequiredDependency != "layeredslopes") {
+    if (incompatibleVersionDependency == "layeredslopes") {
+        runtimeOnly files(incompatibleLayeredSlopesJar).builtBy(tasks.named("downloadIncompatibleLayeredSlopes"))
+    } else if (omitRequiredDependency != "layeredslopes") {
         runtimeOnly files(layeredSlopesJar).builtBy(tasks.named("downloadLayeredSlopes"))
     }
     compileOnly files(layeredSlopeGradingJar).builtBy(tasks.named("downloadLayeredSlopeGrading"))
-    if (omitRequiredDependency != "layeredslopegrading") {
+    if (incompatibleVersionDependency == "layeredslopegrading") {
+        runtimeOnly files(incompatibleLayeredSlopeGradingJar).builtBy(tasks.named("downloadIncompatibleLayeredSlopeGrading"))
+    } else if (omitRequiredDependency != "layeredslopegrading") {
         runtimeOnly files(layeredSlopeGradingJar).builtBy(tasks.named("downloadLayeredSlopeGrading"))
     }
 
