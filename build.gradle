@@ -191,6 +191,16 @@ if (incompatibleVersionDependency == "layeredslopegrading") {
 def localDivJar = findProperty("divLocalJar")
 def divJar = localDivJar ? layout.projectDirectory.file(localDivJar as String) : null
 
+// MINECRAFT-510 (direction comment 55238/M55554611): the real DIV wheel-contact consumer lives
+// in src/divIntegration, the SAME "only added to the compiled sourceSet under this opt-in flag"
+// shape dtPairedRuntime below already uses for DynamicTerrainPairedGameTests -- never part of
+// the default build/test, since these classes import io.github.brooswitminecraft.div types
+// that only resolve when divJar is actually present.
+if (divJar != null) {
+    sourceSets.main.java.srcDir('src/divIntegration/java')
+    sourceSets.main.resources.srcDir('src/divIntegration/resources')
+}
+
 // `-PpairedRuntime=true` additionally pulls in DIV's own required runtime dependencies (mts,
 // Sable, Sable Companion) at the EXACT coordinates DIV's own build.gradle pins, so a real
 // dedicated-server boot has every mod DIV's neoforge.mods.toml actually requires, not just DIV

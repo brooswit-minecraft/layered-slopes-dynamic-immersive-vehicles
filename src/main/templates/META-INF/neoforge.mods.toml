@@ -43,7 +43,11 @@ description='''Dedicated traction-loss erosion compatibility mod between Dynamic
     ordering="AFTER"
     side="BOTH"
 
-# Dynamic Immersive Vehicles is deliberately NOT yet declared here: it ships no stable,
-# sha512-pinnable release to pin against (see build.gradle/gradle.properties for the full
-# rationale). The actual DIV-side contact-telemetry integration -- and this dependency entry --
-# are deferred to a later slice.
+# Dynamic Immersive Vehicles is deliberately NOT declared here as a mods.toml dependency: it
+# still ships no stable, sha512-pinnable release to pin against (see build.gradle/
+# gradle.properties for the full rationale). The real contact-telemetry consumer (MINECRAFT-510,
+# direction comment 55238/M55554611) now exists in src/divIntegration, but that sourceSet is
+# itself only ever compiled/present when a local DIV jar is on the classpath (-PdivLocalJar) --
+# an ordinary release build of this mod simply does not contain it. A real mods.toml dependency
+# entry (likely type="optional", since this mod's other two consumers remain required/standalone
+# of DIV) is deferred until DIV actually cuts a real release to pin.
