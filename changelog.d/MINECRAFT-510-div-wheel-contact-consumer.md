@@ -37,3 +37,21 @@ bump: minor
   longer exist) would have bled into the new one. Added `ErosionDedup#reset()` and
   `WheelContactQueue#clear()`, both called from a new `ServerStartingEvent` listener. Added
   focused `ErosionDedupTest` coverage for the new `reset()` contract.
+- Added full focused coverage for the queue/drain contract itself (`WheelContactQueueTest`):
+  bounded/drop-newest behavior, FIFO drain, `clear()`, and `shouldAttempt`'s stale-tick/missing-
+  dimension/unloaded-chunk/non-top-face rejection -- review finding: "the new WheelContactQueue
+  and DivWheelContactConsumer still have no focused tests ... those are explicit MINECRAFT-510
+  bounded-queue, lifecycle-isolation, and safe-drain acceptance conditions". Writing these tests
+  surfaced a real question the first version silently ignored: "verify whether ignoring the
+  preserved contact face is semantically correct." `ErosionAttempt` treats a position as
+  horizontal ground being worn down from above, never a generic block face -- a wheel's raycast
+  clipping a wall's side is a real possibility DIV's event does not filter out, and eroding a
+  wall as if it were ground footing would be wrong. Fixed by rejecting any non-top-face contact
+  in `shouldAttempt`.
+- To make that testable at all, `WheelContactQueue` moved from `src/divIntegration` to the
+  always-compiled `erosion` package and lost its only DIV-shaped field (`ResourceKey<Level>`/
+  `BlockPos`/`Direction`), becoming Minecraft-free (`Object` dimension, plain `int` coordinates,
+  a single `boolean faceIsUp`) -- matching `ErosionDedup`'s own established convention in this
+  exact package, and for the same reason: this project's plain `./gradlew test` has no NeoForge/
+  FML classpath at all, so a test referencing a real Minecraft type cannot compile under it.
+  `DivWheelContactConsumer` converts at the one real boundary that still needs the real types.
