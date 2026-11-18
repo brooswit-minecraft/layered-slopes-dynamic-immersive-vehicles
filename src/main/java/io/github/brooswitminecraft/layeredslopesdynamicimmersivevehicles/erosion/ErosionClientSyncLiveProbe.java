@@ -55,6 +55,16 @@ public final class ErosionClientSyncLiveProbe {
     private static final int MAX_WATCH_TICKS = 600;
     /** Ticks of continued observation required after the acknowledge file appears. */
     private static final int POST_ACKNOWLEDGE_WATCH_TICKS = 100;
+    /**
+     * Ticks to wait, once both positions are first tracked, before trusting a baseline read.
+     * A concurrent two-client CI run surfaced a real race: {@code hasChunkAt} can return true
+     * before the chunk's block data has fully settled from the initial sync packets, so a
+     * baseline captured on that very first tracked tick can read a transient/incomplete state
+     * that differs from the real value arriving a tick later -- reported as a false CHANGED
+     * before any real mutation ran. Matches the settle-then-read discipline
+     * {@link ErosionClientSyncProbe} already uses for exactly this reason.
+     */
+    private static final int BASELINE_SETTLE_TICKS = 20;
 
     private static boolean baselineCaptured = false;
     private static boolean done = false;
@@ -63,6 +73,7 @@ public final class ErosionClientSyncLiveProbe {
     private static String baselineDestId;
     private static int watchTicks = 0;
     private static int ticksSinceAcknowledge = 0;
+    private static int settleTicks = 0;
 
     private ErosionClientSyncLiveProbe() {
     }
@@ -86,6 +97,10 @@ public final class ErosionClientSyncLiveProbe {
             return;
         }
         if (!baselineCaptured) {
+            settleTicks++;
+            if (settleTicks < BASELINE_SETTLE_TICKS) {
+                return;
+            }
             baselineSourceId = blockId(level.getBlockState(sourcePos));
             baselineDestId = blockId(level.getBlockState(destPos));
             baselineCaptured = true;

@@ -22,3 +22,16 @@ bump: minor
   immediately beforehand and assert its own response names both identities together. Also fixed
   a `grep -c ... || echo 0` bug that printed two numbers (grep's own "0" plus the fallback's)
   whenever no match was found, breaking the numeric comparison.
+- Fixed a `set -e` footgun the previous fix introduced: a bare `var=$(failing_command)`
+  assignment is not exempt from `set -e` the way `cmd && break` is, so replacing `|| echo 0`
+  with a plain assignment made the whole script abort silently (zero further output) the first
+  time `grep -c` found no matches yet. Restored a `|| true` shield (adds no extra stdout, unlike
+  `|| echo 0`) and applied the same shield plus a short retry loop to the new `/list`
+  line-extraction pipeline, which had the identical exposure.
+- Fixed a real race surfaced by running two client JVMs concurrently on one CI runner:
+  `ErosionClientSyncLiveProbe` captured its baseline on the very first tick `hasChunkAt` became
+  true, with no settle delay (unlike `ErosionClientSyncProbe`, which already waits `SETTLE_TICKS`
+  for exactly this reason) -- a transient/incomplete chunk read on that first tick could differ
+  from the real synced value a tick later, reported as a false `CHANGED` before any real mutation
+  ran, disconnecting the client early. Added the same settle-then-read discipline
+  (`BASELINE_SETTLE_TICKS`).
