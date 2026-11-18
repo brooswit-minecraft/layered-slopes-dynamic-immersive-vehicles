@@ -205,9 +205,21 @@ This is a bounded, multi-slice implementation. Current slice:
       real startup/shutdown/mod-list/config/manifest content, never a bare process exit code. This
       is independent of the MINECRAFT-545-gated `PhysicsBridge`/contact-telemetry work below, which
       remains a real, separate hold.
+- [x] Client-sync acceptance, default-OFF case only (direction, comment 55058/55063): an opt-in
+      `client-sync-acceptance.yml` workflow drives a REAL second process -- a real headless
+      NeoForge dev client auto-joining a real dedicated server via vanilla's
+      `--quickPlayMultiplayer` -- rather than a server-only GameTest result or an `UPDATE` flag
+      relabeled as client-sync evidence. A test-only server command forces a single real
+      `ErosionAttempt.attempt` call against the real live config; a test-only client tick hook
+      reads the real `ClientLevel` (built purely from received network packets) at a known
+      position and reports what it actually observed. Proves erosionEnabled's real default
+      (`false`) leaves the world genuinely unchanged from an actual, independently-connected
+      client's own perspective. The enabled/one-layer-mass-conservation and rejected/canceled-
+      unchanged cases remain open, later slices.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), multiplayer sync, and gameplay acceptance evidence.
+      above), the enabled/rejected client-sync acceptance cases, multiplayer sync, and gameplay
+      acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 defaults to OFF via this mod's own real `erosionEnabled` server config (default `false`, see
