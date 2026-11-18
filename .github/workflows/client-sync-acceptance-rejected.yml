@@ -1,0 +1,270 @@
+name: Client-sync acceptance, rejected/canceled unchanged case (opt-in)
+
+# Opt-in, CI-only, isolated runner (never Servy, never a shared/native-test-slot resource).
+# Direction (comment 55058/55111/55114/55137): completes the LIVE post-join update evidence
+# pair alongside client-sync-acceptance-enabled.yml -- this time proving that a REAL,
+# SPECIFIC denial (not merely the absence of a mutation, and never NO_CHANCE/a dropped command/
+# a pre-attempt timeout/a disconnected client standing in for it) leaves both the source and
+# destination genuinely unchanged from an already-connected client's own perspective, observed
+# for a bounded window AFTER the server has acknowledged the real denial.
+#
+# Uses a REAL vanilla protection mechanism, not a mock: spawn protection. server.properties sets
+# a real, nonzero spawn-protection radius, and /setworldspawn pins the world's real spawn point
+# exactly at the test source position, so ClaimProtection#mayMutate's real
+# MinecraftServer#isUnderSpawnProtection check genuinely denies the fake player used for the
+# erosion attempt's break-event preflight. The attempt uses the EXACT same guaranteed-chance
+# config/slip/load as the enabled case (client-sync-acceptance-enabled.yml), so the only reason
+# the attempt can be denied is this real protection check, never chance or direction -- requiring
+# the server to report the specific outcome=PROTECTED, not any other denial outcome.
+#
+# Reuses ErosionClientSyncLiveProbe exactly as-is (no new Java code): it already reports
+# UNCHANGED when it finishes its bounded watch window with no transition observed, which is
+# exactly the correct evidence for this case.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/client-sync-acceptance-rejected.yml'
+      - 'build.gradle'
+      - 'gradle.properties'
+      - 'settings.gradle'
+      - 'gradle/wrapper/**'
+      - 'src/**'
+
+permissions:
+  contents: read
+
+jobs:
+  rejected-unchanged-client-sync-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: server-side
+      - uses: actions/checkout@v4
+        with:
+          path: client-side
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Install Xvfb, a software GL renderer (Mesa llvmpipe), and screenshot/input tooling for the headless client
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y xvfb mesa-utils libgl1-mesa-dri x11-apps imagemagick xdotool
+
+      - name: Pre-seed the server's offline-mode server.properties (real, nonzero spawn-protection) and a test-only enabled-erosion config before first boot
+        run: |
+          mkdir -p server-side/run/config client-side/run
+          echo "eula=true" > server-side/run/eula.txt
+          cat > server-side/run/server.properties <<'EOF'
+          online-mode=false
+          server-port=25579
+          level-seed=512
+          spawn-protection=16
+          EOF
+          # Exact values ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG uses -- the ONLY
+          # reason this slice's forced attempt can be denied must be the real spawn-protection
+          # check below, never chance or direction.
+          cat > server-side/run/config/layeredslopesdynamicimmersivevehicles-server.toml <<'EOF'
+          erosionEnabled = true
+          slipThresholdMs = 0.15
+          baseErosionPerTick = 1000.0
+          referenceSlipMs = 10.0
+          referenceLoadKg = 300.0
+          maxSlipFactor = 3.0
+          minLoadFactor = 0.25
+          maxLoadFactor = 4.0
+          EOF
+
+      - name: Boot a real server, pin real spawn protection over the test position, wait for join, watch the client's baseline, trigger the real-denial attempt, verify both endpoints stayed unchanged, then stop both gracefully
+        run: |
+          set -o pipefail
+          cd server-side
+          mkfifo stdin.pipe
+          exec 9<>stdin.pipe
+          timeout 900 ./gradlew runServer --no-daemon -PerosionClientSyncTest=true \
+            < stdin.pipe > server-boot.log 2>&1 &
+          server_pid=$!
+          cd ..
+
+          for i in $(seq 1 120); do
+            grep -q 'Done (' server-side/server-boot.log 2>/dev/null && break
+            sleep 2
+          done
+          if ! grep -q 'Done (' server-side/server-boot.log; then
+            echo "::error::server never reported 'Done (' -- see server-boot.log"
+            cat server-side/server-boot.log
+            exit 1
+          fi
+
+          # Pin the real world spawn exactly at the test source position so the real,
+          # nonzero spawn-protection radius above genuinely covers it, then set up the same
+          # deterministic block arrangement the enabled case uses (source=dirt, east=air,
+          # east-below=stone anchor, the other three horizontal neighbors=stone).
+          printf 'forceload add 0 0\n' > server-side/stdin.pipe
+          sleep 2
+          for attempt in 1 2 3 4 5; do
+            {
+              printf 'setworldspawn 0 -59 0\n'
+              printf 'setblock 0 -59 0 minecraft:dirt\n'
+              printf 'setblock 1 -59 0 minecraft:air\n'
+              printf 'setblock 1 -60 0 minecraft:stone\n'
+              printf 'setblock -1 -59 0 minecraft:stone\n'
+              printf 'setblock 0 -59 1 minecraft:stone\n'
+              printf 'setblock 0 -59 -1 minecraft:stone\n'
+            } > server-side/stdin.pipe
+            sleep 3
+            grep -qF 'Changed the block at 0, -59, 0' server-side/server-boot.log 2>/dev/null && break
+            echo "diagnostic: setup attempt $attempt did not land yet, retrying"
+          done
+          if ! grep -qF 'Changed the block at 0, -59, 0' server-side/server-boot.log; then
+            echo "::error::world setup never reached the server after 5 attempts -- see server-boot.log tail:"
+            tail -20 server-side/server-boot.log
+            kill -9 "$server_pid" 2>/dev/null || true
+            exit 1
+          fi
+
+          Xvfb :99 -screen 0 1280x720x24 &
+          xvfb_pid=$!
+          sleep 2
+          export DISPLAY=:99
+
+          cd client-side
+          timeout 600 ./gradlew runClient --no-daemon \
+              -PerosionClientSyncLiveProbe=true \
+              -PerosionClientSyncQuickPlay=localhost:25579 \
+              -PerosionClientSyncLiveProbeSourcePos=0,-59,0 \
+              -PerosionClientSyncLiveProbeDestPos=1,-59,0 \
+              -PerosionClientSyncLiveProbeReadySignalFile="$(pwd)/client-ready-signal.txt" \
+              -PerosionClientSyncLiveProbeOutputFile="$(pwd)/client-live-probe-result.txt" \
+            > client-boot.log 2>&1 &
+          client_pid=$!
+          cd ..
+
+          for i in $(seq 1 30); do
+            grep -qF 'Loaded 0 entity animations' client-side/client-boot.log 2>/dev/null && break
+            sleep 2
+          done
+          for attempt in 1 2 3 4 5 6; do
+            DISPLAY=:99 xdotool mousemove 638 567 2>>client-side/xdotool.log || true
+            sleep 1
+            DISPLAY=:99 xdotool mousedown 1 2>>client-side/xdotool.log || true
+            sleep 1
+            DISPLAY=:99 xdotool mouseup 1 2>>client-side/xdotool.log || true
+            grep -qE 'joined the game' server-side/server-boot.log 2>/dev/null && break
+            sleep 7
+          done
+          if ! grep -qE 'joined the game' server-side/server-boot.log; then
+            echo "::error::no player ever joined the server -- the headless client did not connect. client-boot.log:"
+            cat client-side/client-boot.log || true
+            kill -9 "$server_pid" "$client_pid" "$xvfb_pid" 2>/dev/null || true
+            exit 1
+          fi
+          # Teleport well away from the protected test position so the real spawn-protection
+          # check is exercised by a position the player is merely watching, not standing on --
+          # the fake player ClaimProtection uses for its break-event preflight is independent of
+          # the real connected player's own position, but the client still needs to actually
+          # track the chunk at (0,-59,0)/(1,-59,0); a nearby position keeps both satisfied.
+          printf 'tp @a 2 -58 2\n' > server-side/stdin.pipe
+          sleep 3
+
+          # The client must signal it has genuinely captured a baseline from its own ClientLevel
+          # BEFORE the attempt is triggered -- same discipline as the enabled case -- and the
+          # attempt must be fired promptly after that signal so the probe's own bounded watch
+          # window (started at baseline capture) still has time left to observe the real denial
+          # acknowledgment, not merely time out before the attempt even runs.
+          ready=false
+          for i in $(seq 1 60); do
+            if [ -f client-side/client-ready-signal.txt ]; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != "true" ]; then
+            echo "::error::the client never signaled that it captured its baseline -- it may never have tracked the target chunk. client-boot.log:"
+            cat client-side/client-boot.log || true
+            kill -9 "$server_pid" "$client_pid" "$xvfb_pid" 2>/dev/null || true
+            exit 1
+          fi
+
+          printf 'erosionclientsynctest 0 -59 0 5.0 300.0\n' > server-side/stdin.pipe
+          sleep 3
+          # Require the exact, specific real denial -- never a different outcome standing in for
+          # it (NO_CHANCE, NO_VALID_DIRECTION, etc. would all also leave the world unchanged, but
+          # none of them would be genuine protection-cancellation evidence).
+          if ! grep -qF 'erosionclientsynctest outcome=PROTECTED' server-side/server-boot.log; then
+            echo "::error::expected 'erosionclientsynctest outcome=PROTECTED' in the server log -- the forced attempt did not report the expected real denial. server-boot.log tail:"
+            tail -20 server-side/server-boot.log
+            kill -9 "$server_pid" "$client_pid" "$xvfb_pid" 2>/dev/null || true
+            exit 1
+          fi
+
+          # Wait for the client's own bounded watch window to finish naturally (it must still be
+          # connected and actively watching for this file to ever appear) -- this is real,
+          # continued, post-acknowledgment observation of both endpoints, not a one-shot read.
+          found=false
+          for i in $(seq 1 90); do
+            if [ -s client-side/client-live-probe-result.txt ]; then
+              found=true
+              break
+            fi
+            sleep 2
+          done
+
+          echo "stop" > server-side/stdin.pipe
+          graceful=false
+          for i in $(seq 1 30); do
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              graceful=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$graceful" != "true" ]; then
+            kill -9 "$server_pid" 2>/dev/null || true
+          fi
+          kill -9 "$client_pid" 2>/dev/null || true
+          kill -9 "$xvfb_pid" 2>/dev/null || true
+          exec 9>&-
+          rm -f server-side/stdin.pipe
+
+          if [ "$found" != "true" ]; then
+            echo "::error::the client never wrote a live-probe result -- it may have disconnected or stalled. client-boot.log:"
+            cat client-side/client-boot.log || true
+            exit 1
+          fi
+          cat client-side/client-live-probe-result.txt
+          status=$(sed -n '1p' client-side/client-live-probe-result.txt)
+          source_block=$(sed -n '2p' client-side/client-live-probe-result.txt)
+          dest_block=$(sed -n '4p' client-side/client-live-probe-result.txt)
+
+          if [ "$status" != "UNCHANGED" ]; then
+            echo "::error::expected the client to observe both endpoints UNCHANGED after the real denial, got status '$status'"
+            exit 1
+          fi
+          if [ "$source_block" != "minecraft:dirt" ]; then
+            echo "::error::expected the client to still observe the source as minecraft:dirt (unchanged), got '$source_block'"
+            exit 1
+          fi
+          if [ "$dest_block" != "minecraft:air" ]; then
+            echo "::error::expected the client to still observe the destination as minecraft:air (unchanged), got '$dest_block'"
+            exit 1
+          fi
+          echo "confirmed: a real, already-connected client independently observed BOTH endpoints genuinely unchanged after a real, specific outcome=PROTECTED denial (real spawn-protection, not NO_CHANCE/a dropped command/a timeout/a disconnected client) -- genuine client-synchronization evidence of the rejected/canceled-unchanged case"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: client-sync-acceptance-rejected-evidence
+          path: |
+            server-side/server-boot.log
+            client-side/client-boot.log
+            client-side/client-live-probe-result.txt
+            client-side/client-ready-signal.txt
+          if-no-files-found: warn

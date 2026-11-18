@@ -225,12 +225,25 @@ This is a bounded, multi-slice implementation. Current slice:
       with 15 layers, destination with 1 layer, 16 total conserved -- the same material
       conservation `ErosionAttemptGameTests` already proves in isolation, now proven live from an
       actual connected client's own perspective, using the exact same deterministic block
-      arrangement and `GUARANTEED_CHANCE_CONFIG` values. The rejected/canceled-unchanged case
-      remains an open, later slice.
+      arrangement and `GUARANTEED_CHANCE_CONFIG` values.
+- [ ] Client-sync acceptance, rejected/canceled-unchanged case, with LIVE post-join evidence --
+      implemented, not yet CI-verified (direction, comment 55058/55111/55114/55137): a third
+      opt-in
+      `client-sync-acceptance-rejected.yml` workflow completes the pair -- a REAL, SPECIFIC
+      denial (never merely the absence of a mutation, and never `NO_CHANCE`/a dropped command/a
+      pre-attempt timeout/a disconnected client standing in for it). Uses a real vanilla
+      mechanism, not a mock: a nonzero `spawn-protection` radius plus `/setworldspawn` pinned
+      exactly at the test position, so `ClaimProtection#mayMutate`'s real
+      `isUnderSpawnProtection` check genuinely denies the attempt -- using the exact same
+      guaranteed-chance config as the enabled case, so the only possible denial reason is this
+      real protection check, requiring the server to report the specific `outcome=PROTECTED`.
+      The already-connected client, watching both endpoints since before the attempt, must
+      independently observe both genuinely unchanged for a bounded window after that real denial
+      is acknowledged -- reusing `ErosionClientSyncLiveProbe`'s existing `UNCHANGED` report path
+      exactly as built.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), the rejected/canceled client-sync acceptance case, multiplayer sync, and gameplay
-      acceptance evidence.
+      above), multiplayer sync, and gameplay acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 defaults to OFF via this mod's own real `erosionEnabled` server config (default `false`, see
