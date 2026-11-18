@@ -382,6 +382,17 @@ neoForge {
     }
 }
 
+// Gradle's JavaExec tasks (which every NeoForge moddev run resolves to) do NOT forward this
+// process's stdin to the forked JVM by default -- CI discovered this the hard way: a whole
+// named-pipe console-command-injection harness (setblock/custom test commands, even the final
+// "stop") silently never reached a real ./gradlew runServer-booted server at all, with no error,
+// because nothing was listening. A human running `./gradlew runServer` directly at a real
+// terminal benefits from this too (real console input actually works), so this is wired
+// unconditionally, not just for CI.
+tasks.named("runServer") {
+    standardInput = System.in
+}
+
 dependencies {
     compileOnly files(layeredSlopesJar).builtBy(tasks.named("downloadLayeredSlopes"))
     if (incompatibleVersionDependency == "layeredslopes") {
