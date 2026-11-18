@@ -123,7 +123,22 @@ jobs:
           # coordinates at our fixed 1280x720 resolution), the equivalent of that one-time human
           # acknowledgment, not fabricated evidence.
           sleep 25
-          DISPLAY=:99 xdotool mousemove 638 567 click 1 2>client-side/xdotool.log || true
+          # A second run's screenshot showed the Continue button correctly highlighted after
+          # the mousemove (proof the synthetic mouse-move was received), but the dialog was
+          # still showing -- the combined "click 1" press+release didn't register as an actual
+          # activation. Explicitly focus the window first (no window manager is running under
+          # bare Xvfb, so a window may not have focus by default) and send mousedown/mouseup as
+          # separate events with a short delay between them.
+          DISPLAY=:99 xdotool search --name "Minecraft" windowactivate --sync 2>client-side/xdotool.log || true
+          DISPLAY=:99 xdotool mousemove 638 567 2>>client-side/xdotool.log || true
+          sleep 1
+          DISPLAY=:99 xdotool mousedown 1 2>>client-side/xdotool.log || true
+          sleep 1
+          DISPLAY=:99 xdotool mouseup 1 2>>client-side/xdotool.log || true
+          sleep 3
+          xwd -root -display :99 -out /tmp/post-click-screen.xwd 2>>client-side/xwd.log \
+            && convert /tmp/post-click-screen.xwd client-side/post-click-screenshot.png 2>>client-side/xwd.log \
+            || true
 
           last_client_lines=0
           diagnostics_captured=false
@@ -217,6 +232,7 @@ jobs:
             client-side/client-boot.log
             client-side/client-probe-result.txt
             client-side/client-screenshot.png
+            client-side/post-click-screenshot.png
             client-side/client-thread-dump.txt
             client-side/xwd.log
             client-side/xdotool.log
