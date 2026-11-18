@@ -21,15 +21,31 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      # Only the pure erosion/config module exists in this slice (see README.md Status) --
-      # `./gradlew build` here does not yet exercise a NeoForge mod build or GameTest server,
-      # unlike the sibling compat mods' fuller CI. Extend this job once that scaffold lands.
+      - name: Test release scripts
+        run: python3 -m unittest discover -s scripts
+
+      - name: Check the mod does not require a newer NeoForge than the pack runs
+        run: python3 scripts/check_neoforge_floor.py
+
+      # NeoForge mod scaffold + pinned layered-slopes/layered-slope-grading dependencies
+      # (MINECRAFT-510 slice 2). No GameTests exist yet -- there is no erosion consumer or any
+      # other gameplay behavior to test, only the mod scaffold itself. A `runGameTestServer` step
+      # deliberately is NOT added here yet: confirmed live that it fails with "No test functions
+      # were given!" when a mod declares zero @GameTest methods, which check_gametest_count.py
+      # would correctly treat as a failure, not a vacuous pass -- so there is nothing this step
+      # could honestly assert yet. Add both once the first real GameTest exists.
       - name: Build and test
         run: ./gradlew build --no-daemon
 
-      - name: Upload build artifacts
+      - name: Upload mod jar
         uses: actions/upload-artifact@v4
         with:
-          name: layered-slopes-dynamic-immersive-vehicles-test-results
-          path: build/test-results/test/*.xml
+          name: layered-slopes-dynamic-immersive-vehicles
+          path: build/libs/*.jar
           if-no-files-found: error
+
+  release-gate:
+    uses: brooswit-factory/release-gate/.github/workflows/gate.yml@v1
+    with:
+      gated-paths: '["^src/"]'
+      version-file: 'gradle.properties'

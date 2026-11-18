@@ -22,20 +22,28 @@ This is a bounded, multi-slice implementation. Current slice:
       mapping, immutable config snapshot with atomic-rejected hot reload, matching the accepted
       MINECRAFT-555 contract defaults and acceptance-matrix boundary cases. No Minecraft/NeoForge
       dependency, no RNG draw, no world mutation — pure functions and unit tests only.
-- [ ] NeoForge mod scaffold (main mod class, `neoforge.mods.toml`, DIV/layered-slopes/
-      layered-slope-grading download-and-verify dependencies). Deferred: no stable, sha512-
-      pinnable DIV release exists yet (`gh release list` on that repo returns only private
-      "not for publishing" draft test-builds).
-- [ ] DIV-side generic contact-telemetry seam (per-wheel slip/load payload). Deferred: DIV PR #39
-      (MINECRAFT-545, hitch support) is an active, in-flight PR currently touching
-      `PhysicsBridge.java`; this mod will not edit that file until #39 lands or is explicitly
-      sequenced/rebased against.
-- [ ] layered-slope-grading-side generic safe-mutation/protection seam (cancellable authorization
-      hook around `Smoothing.smooth`, covering source/destination and neighbor/cave-in effects).
-      Not yet reviewed or implemented; `Smoothing.smooth` as of
-      `7c12f690ba4ef39f2dd5d793bd8cdf1cb3e7ec2f` has no permission hook.
+- [x] NeoForge mod scaffold: main mod class, `neoforge.mods.toml`, pinned (sha512-verified)
+      download-and-verify dependencies on `layered-slopes` (v0.2.0) and `layered-slope-grading`
+      (v0.1.0). Confirmed booting for real via `./gradlew runGameTestServer` (loads with 0 of 9
+      mandatory mod requirements missing).
+- [ ] DIV dependency and its contact-telemetry seam (per-wheel slip/load payload). Deferred: DIV
+      ships no stable, sha512-pinnable GitHub Release at all (`gh release list` on that repo
+      returns only private "not for publishing" draft test-builds), so it is not yet declared as
+      a build-time dependency here (would make the default `./gradlew build` fail closed for
+      everyone). Also, DIV PR #39 (MINECRAFT-545, hitch support) is an active, in-flight PR
+      currently touching `PhysicsBridge.java`; this mod will not edit that file until #39 lands
+      or is explicitly sequenced/rebased against.
+- [x] layered-slope-grading-side generic safe-mutation/protection seam: `SmoothingAuthorizationEvent`,
+      a cancellable NeoForge event fired before `Smoothing.smooth()` mutates the world, merged in
+      [layered-slope-grading PR #2](https://github.com/brooswit-minecraft/layered-slope-grading/pull/2)
+      (released as part of that mod's next version). Does NOT by itself cover resulting
+      neighbor/cave-in propagation after an authorized move, and no existing third-party
+      claim/protection mod automatically gains coverage from it — both explicitly named gaps for
+      whichever erosion consumer slice needs that coverage to implement and test it.
 - [ ] Erosion consumer (server-thread authoritative, per-tick dedup, multiplayer sync, default
-      OFF), protection gate, GameTest acceptance evidence, CI.
+      OFF), the explicit propagation/claim-adapter protection policy that seam above does not
+      itself provide, GameTest acceptance evidence for actual gameplay behavior, dependency-
+      failure tests, pinned-jar smoke acceptance.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 will default to OFF; operators running this mod alongside Dynamic Terrain's deprecated vehicle
@@ -47,5 +55,14 @@ erosion should disable DT's `vehicleErosion` to avoid double effects.
 ./gradlew build
 ```
 
-Only the pure `erosion` package exists today; `./gradlew test` runs its unit tests with no
-external mod dependency required.
+Downloads and sha512-verifies real `layered-slopes`/`layered-slope-grading` release jars on
+first run. The pure `erosion` package's own tests (`./gradlew test`) need neither of those --
+they are plain JUnit 5 tests with no Minecraft/NeoForge dependency.
+
+```
+./gradlew runGameTestServer
+```
+
+Boots a real dedicated server with this mod, `layered-slopes`, and `layered-slope-grading`
+installed. No GameTests exist yet (nothing to test until the erosion consumer lands), so this is
+currently just a real-boot smoke check, not run in CI yet -- see `scripts/check_gametest_count.py`.

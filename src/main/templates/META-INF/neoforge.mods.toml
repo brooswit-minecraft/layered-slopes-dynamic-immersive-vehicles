@@ -1,0 +1,49 @@
+modLoader="javafml" #mandatory
+loaderVersion="${loader_version_range}" #mandatory
+
+license="${mod_license}"
+
+[[mods]] #mandatory
+modId="${mod_id}" #mandatory
+version="${mod_version}" #mandatory
+displayName="${mod_name}" #mandatory
+authors="brooswit"
+description='''Dedicated traction-loss erosion compatibility mod between Dynamic Immersive Vehicles and Layered Slopes, via Layered Slope Grading. Erosion is not yet wired in; see MINECRAFT-510.'''
+
+[[dependencies.${mod_id}]]
+    modId="neoforge"
+    type="required"
+    versionRange="[${neo_version},)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="minecraft"
+    type="required"
+    versionRange="${minecraft_version_range}"
+    ordering="NONE"
+    side="BOTH"
+
+# Layered Slopes provides the layered block family the erosion consumer will ultimately touch,
+# indirectly through layered-slope-grading's Smoothing service.
+[[dependencies.${mod_id}]]
+    modId="layeredslopes"
+    type="required"
+    versionRange="[${layeredslopes_version},)"
+    ordering="AFTER"
+    side="BOTH"
+
+# Layered Slope Grading provides the Smoothing.smooth/canSmooth service and the
+# SmoothingAuthorizationEvent protection seam this mod's erosion consumer will call -- never
+# LayeredBlock/LayerMath directly (MINECRAFT-555 prep packet, comment 54607).
+[[dependencies.${mod_id}]]
+    modId="layeredslopegrading"
+    type="required"
+    versionRange="[${layeredslopegrading_version},)"
+    ordering="AFTER"
+    side="BOTH"
+
+# Dynamic Immersive Vehicles is deliberately NOT yet declared here: it ships no stable,
+# sha512-pinnable release to pin against (see build.gradle/gradle.properties for the full
+# rationale). The actual DIV-side contact-telemetry integration -- and this dependency entry --
+# are deferred to a later slice.

@@ -1,31 +1,180 @@
-// Slice 1 of MINECRAFT-510's bounded implementation sequence: the pure erosion policy/config
-// module only (deterministic slip/load/resistance mapping, immutable config snapshot with
-// atomic-rejected hot reload -- MINECRAFT-555 comments 54607/54611/54614/54618, approved
-// 54622/54623). This module makes no reference to Minecraft/NeoForge classes, so it is built and
-// tested as a plain java-library + JUnit 5 project rather than pulling in the full
-// net.neoforged.moddev toolchain this project will need once the NeoForge-side mod scaffold
-// (main mod class, mixins, DIV/layered-slopes/layered-slope-grading download-and-verify
-// dependencies, GameTest harness) is added in a later slice -- see README.md and the MINECRAFT-510
-// pickup comment for why that part is deliberately deferred in this PR (active M545 PR #39 is
-// still touching DIV's PhysicsBridge.java; the grading-side mutation seam is unreviewed).
+// Slice 2 of MINECRAFT-510's bounded implementation sequence (slice 1: pure erosion
+// policy/config module, merged in PR #1). Adds the real NeoForge mod scaffold with pinned
+// dependencies on layered-slopes and layered-slope-grading (both have real, sha512-verified
+// GitHub releases). The pure erosion policy/config module from slice 1 (the `erosion` package)
+// has no Minecraft/NeoForge reference and needs none of this -- its own tests still run under
+// plain `./gradlew test` as before.
+//
+// Deliberately NOT yet declared here: a dynamic-immersive-vehicles (DIV) dependency. DIV ships
+// no stable, sha512-pinnable GitHub Release (verified at pickup -- see gradle.properties'
+// div_version/div_sha512 comments). Declaring it as a required neoforge.mods.toml dependency
+// without a real pinned release would make the default `./gradlew build` fail closed for every
+// contributor and CI run, not just this slice -- so the DIV-side wiring (the actual erosion
+// consumer that reads its contact telemetry) is deferred to its own later slice, once either a
+// real DIV release exists or a local-jar paired-PR build pipeline is set up for it, same as the
+// other two dependencies originally needed before their first release existed.
 plugins {
     id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.147'
+    id 'idea'
 }
 
-group = project.mod_group_id
-version = (findProperty("mod_version") ?: project.version) as String
+tasks.named('wrapper', Wrapper).configure {
+    distributionType = Wrapper.DistributionType.BIN
+}
 
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
-    }
+group = mod_group_id
+
+// Single source of truth for the shipped version is `version=` in gradle.properties, the file
+// the release gate reads. A release workflow may override it with `-Pmod_version=<version>`.
+def modVersion = (findProperty("mod_version") ?: project.version) as String
+version = modVersion
+
+sourceSets.main.resources {
+    srcDir('src/generated/resources')
+    exclude("src/generated/**/.cache")
 }
 
 repositories {
+    // layered-slopes/layered-slope-grading are not on a maven repository; fetched from their
+    // GitHub releases, pinned by version and verified by sha512, the same pattern every sibling
+    // compat mod in this org uses for these exact dependencies.
     mavenCentral()
 }
 
+// layered-slopes provides the LayeredBlock/LayerMath classes this mod's erosion code consumes
+// indirectly (through layered-slope-grading's Smoothing service, never directly -- see the
+// layeredslopegrading comment below). Required, not optional: this mod cannot function without
+// the real registered layered blocks, so this goes on compileOnly AND runtimeOnly.
+//
+// `-PlayeredslopesLocalJar=<path>` overrides the release download with a locally built jar, for
+// paired-PR integration validation before a given layered-slopes release exists -- same pattern
+// every sibling repo's build.gradle uses for this dependency.
+def localLayeredSlopesJar = findProperty("layeredslopesLocalJar")
+def layeredSlopesJar = localLayeredSlopesJar
+        ? layout.projectDirectory.file(localLayeredSlopesJar as String)
+        : layout.buildDirectory.file("layeredslopes/layeredslopes-${project.layeredslopes_version}.jar")
+def effectiveLayeredSlopesVersion = localLayeredSlopesJar ? "0.0.0" : project.layeredslopes_version
+def pinnedLayeredSlopesVersion = project.layeredslopes_version
+def pinnedLayeredSlopesSha512 = project.layeredslopes_sha512
+tasks.register("downloadLayeredSlopes") {
+    outputs.file(layeredSlopesJar)
+    onlyIf { !localLayeredSlopesJar }
+    doLast {
+        if (pinnedLayeredSlopesVersion == "UNRELEASED") {
+            throw new GradleException("layeredslopes_version/layeredslopes_sha512 in gradle.properties are still " +
+                    "a placeholder -- fill them in with the real brooswit-minecraft/layered-slopes release before " +
+                    "building, or pass -PlayeredslopesLocalJar=<path> for paired-PR integration validation only.")
+        }
+        def target = layeredSlopesJar.get().asFile
+        target.parentFile.mkdirs()
+        def url = "https://github.com/brooswit-minecraft/layered-slopes/releases/download/v${pinnedLayeredSlopesVersion}/layeredslopes-${pinnedLayeredSlopesVersion}.jar"
+        new URL(url).withInputStream { input -> target.withOutputStream { it << input } }
+        def digest = java.security.MessageDigest.getInstance("SHA-512")
+        def actual = digest.digest(target.bytes).encodeHex().toString()
+        if (actual != pinnedLayeredSlopesSha512) {
+            target.delete()
+            throw new GradleException("layered-slopes ${pinnedLayeredSlopesVersion} sha512 mismatch: ${actual}")
+        }
+    }
+}
+
+// layered-slope-grading provides the Smoothing/canSmooth service this mod's erosion consumer
+// will call (MINECRAFT-555 prep packet, comment 54607: "DIV depends on layered-slope-grading
+// (Smoothing/LayeredMaterials), not layered-slopes directly, and never calls
+// LayeredBlock/LayerMath itself"). Required, not optional, for the same reason as layered-slopes
+// above.
+//
+// `-PlayeredslopeGradingLocalJar=<path>` overrides the release download with a locally built
+// jar, for paired-PR integration validation before this mod depends on a feature (e.g. the
+// SmoothingAuthorizationEvent protection seam from this ticket's own PR #2 on that repo) that
+// has not shipped in a real grading release yet.
+def localLayeredSlopeGradingJar = findProperty("layeredslopeGradingLocalJar")
+def layeredSlopeGradingJar = localLayeredSlopeGradingJar
+        ? layout.projectDirectory.file(localLayeredSlopeGradingJar as String)
+        : layout.buildDirectory.file("layeredslopegrading/layeredslopegrading-${project.layeredslopegrading_version}.jar")
+def effectiveLayeredSlopeGradingVersion = localLayeredSlopeGradingJar ? "0.0.0" : project.layeredslopegrading_version
+def pinnedLayeredSlopeGradingVersion = project.layeredslopegrading_version
+def pinnedLayeredSlopeGradingSha512 = project.layeredslopegrading_sha512
+tasks.register("downloadLayeredSlopeGrading") {
+    outputs.file(layeredSlopeGradingJar)
+    onlyIf { !localLayeredSlopeGradingJar }
+    doLast {
+        if (pinnedLayeredSlopeGradingVersion == "UNRELEASED") {
+            throw new GradleException("layeredslopegrading_version/layeredslopegrading_sha512 in gradle.properties " +
+                    "are still a placeholder -- fill them in with the real brooswit-minecraft/layered-slope-grading " +
+                    "release before building, or pass -PlayeredslopeGradingLocalJar=<path> for paired-PR " +
+                    "integration validation only.")
+        }
+        def target = layeredSlopeGradingJar.get().asFile
+        target.parentFile.mkdirs()
+        def url = "https://github.com/brooswit-minecraft/layered-slope-grading/releases/download/v${pinnedLayeredSlopeGradingVersion}/layeredslopegrading-${pinnedLayeredSlopeGradingVersion}.jar"
+        new URL(url).withInputStream { input -> target.withOutputStream { it << input } }
+        def digest = java.security.MessageDigest.getInstance("SHA-512")
+        def actual = digest.digest(target.bytes).encodeHex().toString()
+        if (actual != pinnedLayeredSlopeGradingSha512) {
+            target.delete()
+            throw new GradleException("layered-slope-grading ${pinnedLayeredSlopeGradingVersion} sha512 mismatch: ${actual}")
+        }
+    }
+}
+
+base {
+    archivesName = mod_id
+}
+
+// Mojang ships Java 21 to end users in 1.21.1, so mods target Java 21.
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = project.neo_version
+
+    parchment {
+        mappingsVersion = project.parchment_mappings_version
+        minecraftVersion = project.parchment_minecraft_version
+    }
+
+    runs {
+        client {
+            client()
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        server {
+            server()
+            programArgument '--nogui'
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        gameTestServer {
+            type = "gameTestServer"
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        data {
+            data()
+            programArguments.addAll '--mod', project.mod_id, '--all', '--output', file('src/generated/resources/').getAbsolutePath(), '--existing', file('src/main/resources/').getAbsolutePath()
+        }
+
+        configureEach {
+            systemProperty 'forge.logging.markers', 'REGISTRIES'
+            logLevel = org.slf4j.event.Level.DEBUG
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
 dependencies {
+    compileOnly files(layeredSlopesJar).builtBy(tasks.named("downloadLayeredSlopes"))
+    runtimeOnly files(layeredSlopesJar).builtBy(tasks.named("downloadLayeredSlopes"))
+    compileOnly files(layeredSlopeGradingJar).builtBy(tasks.named("downloadLayeredSlopeGrading"))
+    runtimeOnly files(layeredSlopeGradingJar).builtBy(tasks.named("downloadLayeredSlopeGrading"))
+
     testImplementation platform('org.junit:junit-bom:5.11.3')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
@@ -33,4 +182,38 @@ dependencies {
 
 test {
     useJUnitPlatform()
+}
+
+// Expands `${mod_version}` and friends in neoforge.mods.toml to the values computed above, so
+// the jar's file name and the version baked into the built jar's mods.toml can never drift apart.
+var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
+    var replaceProperties = [
+            minecraft_version          : minecraft_version,
+            minecraft_version_range    : minecraft_version_range,
+            neo_version                : neo_version,
+            loader_version_range       : loader_version_range,
+            mod_id                     : mod_id,
+            mod_name                   : mod_name,
+            mod_license                : mod_license,
+            mod_version                : modVersion,
+            layeredslopes_version      : effectiveLayeredSlopesVersion,
+            layeredslopegrading_version: effectiveLayeredSlopeGradingVersion,
+    ]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from "src/main/templates"
+    into "build/generated/sources/modMetadata"
+}
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+    }
 }
