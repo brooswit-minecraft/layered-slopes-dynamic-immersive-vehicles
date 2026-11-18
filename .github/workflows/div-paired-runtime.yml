@@ -1,0 +1,110 @@
+name: DIV paired-runtime check (opt-in)
+
+# Opt-in, workflow_dispatch-only: never runs on an ordinary push or PR. MINECRAFT-510's actual
+# DIV dependency is a fresh local build (DIV ships no stable release to pin by version/sha512),
+# so this is the one place that build happens at all, and is the "untested environment where
+# DIV's own equivalent build succeeds" (direction, Jira comment 54843) -- this mod's own local
+# sandbox could not reliably do a fresh NeoForge decompile/recompile at all, regardless of
+# version, so the question moved here rather than more local retries.
+on:
+  workflow_dispatch:
+    inputs:
+      divRef:
+        description: 'DIV commit/branch/tag to build against'
+        required: true
+        default: '958e64551991b7d5c44520bf60d18034ebfa0df6'
+
+permissions:
+  contents: read
+
+jobs:
+  paired-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+        with:
+          path: compat
+
+      - name: Check out DIV at the pinned ref
+        uses: actions/checkout@v4
+        with:
+          repository: brooswit-minecraft/dynamic-immersive-vehicles
+          ref: ${{ inputs.divRef }}
+          path: div
+
+      - name: Record the actual DIV commit built
+        working-directory: div
+        run: git rev-parse HEAD
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      # Matches DIV's own ci.yml exactly (no committed wrapper there) so this is the same,
+      # already-proven toolchain, not a fresh guess.
+      - name: Set up Gradle 8.8
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.8'
+
+      - name: Build DIV
+        working-directory: div
+        run: gradle --no-daemon --stacktrace clean build -x test
+
+      - name: Locate the built DIV jar
+        id: divjar
+        working-directory: div
+        run: |
+          jar=$(find build/libs -maxdepth 1 -name '*.jar' | head -n1)
+          if [ -z "$jar" ]; then
+            echo "::error::no DIV jar found under div/build/libs"
+            exit 1
+          fi
+          echo "path=$(readlink -f "$jar")" >> "$GITHUB_OUTPUT"
+
+      - name: Build this mod against DIV + its own required dependencies (mts, Sable, Sable Companion)
+        working-directory: compat
+        run: |
+          ./gradlew build --no-daemon \
+            "-PdivLocalJar=${{ steps.divjar.outputs.path }}" \
+            -PpairedRuntime=true
+
+      - name: Boot a real dedicated server with DIV, this mod, and every DIV-required dependency loaded
+        working-directory: compat
+        run: |
+          set -o pipefail
+          ./gradlew runGameTestServer --no-daemon \
+            "-PdivLocalJar=${{ steps.divjar.outputs.path }}" \
+            -PpairedRuntime=true \
+            2>&1 | tee paired-runtime-boot.log
+
+      - name: Verify every expected mod actually loaded (not just a clean exit code)
+        working-directory: compat
+        run: |
+          echo "--- Mod List from the boot log ---"
+          sed -n '/Mod List:/,/^\s*$/p' paired-runtime-boot.log
+          for modid in layeredslopesdynamicimmersivevehicles layeredslopes layeredslopegrading dynamicimmersivevehicles mts sable sablecompanion; do
+            if ! grep -q "($modid)" paired-runtime-boot.log; then
+              echo "::error::expected mod id '$modid' not found in the boot log's Mod List"
+              exit 1
+            fi
+          done
+          if grep -qi "Found 0 mod requirements missing (0 mandatory, 0 optional)" paired-runtime-boot.log; then
+            echo "0 missing mod requirements confirmed"
+          else
+            echo "::error::did not find the expected '0 mod requirements missing' line -- a dependency failed to resolve"
+            exit 1
+          fi
+
+      - name: Upload the full paired-runtime boot log regardless of outcome
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: div-paired-runtime-boot-log
+          path: compat/paired-runtime-boot.log
+          if-no-files-found: warn

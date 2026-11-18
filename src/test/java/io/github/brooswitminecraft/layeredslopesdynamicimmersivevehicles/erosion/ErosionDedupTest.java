@@ -86,4 +86,30 @@ class ErosionDedupTest {
         ErosionDedup dedup = new ErosionDedup();
         assertThrows(NullPointerException.class, () -> dedup.tryClaim(null, 1, 2, 3, 100));
     }
+
+    @Test
+    void aRegressingTickFailsClosedInsteadOfSilentlyReauthorizingADuplicateClaim() {
+        // Regression (PR #3 review 54845): the sequence 100, 99, 100 must NOT clear the tick-100
+        // claims twice and let the second tick-100 call re-authorize a position already claimed
+        // the first time. The regression (tick 99 after 100) must fail loudly instead.
+        ErosionDedup dedup = new ErosionDedup();
+        assertTrue(dedup.tryClaim(OVERWORLD, 1, 2, 3, 100));
+        assertFalse(dedup.tryClaim(OVERWORLD, 1, 2, 3, 100), "sanity: still denied within the same tick 100");
+
+        assertThrows(IllegalStateException.class, () -> dedup.tryClaim(OVERWORLD, 4, 5, 6, 99));
+
+        // The failed regression must not have cleared or otherwise mutated the tick-100 state:
+        // the original claim is still denied to a second claimant.
+        assertFalse(dedup.tryClaim(OVERWORLD, 1, 2, 3, 100),
+                "a rejected tick regression must not have reset tick 100's claims");
+    }
+
+    @Test
+    void theSameTickRepeatedAfterAnEqualTickIsNotARegression() {
+        // tick == highestTickSeen (not strictly greater) must stay within-tick dedup, not throw.
+        ErosionDedup dedup = new ErosionDedup();
+        assertTrue(dedup.tryClaim(OVERWORLD, 1, 2, 3, 100));
+        assertFalse(dedup.tryClaim(OVERWORLD, 1, 2, 3, 100));
+        assertTrue(dedup.tryClaim(OVERWORLD, 4, 5, 6, 100));
+    }
 }

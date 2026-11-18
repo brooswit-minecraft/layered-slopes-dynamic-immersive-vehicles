@@ -119,6 +119,33 @@ tasks.register("downloadLayeredSlopeGrading") {
     }
 }
 
+// Opt-in paired-runtime check (MINECRAFT-510, direction 54843): DIV has no stable release to
+// pin, so there is no download-and-verify task here -- `-PdivLocalJar=<path>` (a jar built
+// fresh from DIV's own pinned commit, e.g. by the div-paired-runtime.yml workflow) is the ONLY
+// way to put DIV on the classpath at all. Omitting it (the default for every ordinary build)
+// means DIV is simply absent -- never a required, always-on dependency.
+def localDivJar = findProperty("divLocalJar")
+def divJar = localDivJar ? layout.projectDirectory.file(localDivJar as String) : null
+
+// `-PpairedRuntime=true` additionally pulls in DIV's own required runtime dependencies (mts,
+// Sable, Sable Companion) at the EXACT coordinates DIV's own build.gradle pins, so a real
+// dedicated-server boot has every mod DIV's neoforge.mods.toml actually requires, not just DIV
+// itself. Off by default: these two extra Maven hosts and their coordinates are irrelevant to
+// every ordinary build and must never affect one.
+def pairedRuntime = findProperty("pairedRuntime") == "true"
+if (pairedRuntime) {
+    repositories {
+        maven {
+            url = 'https://maven.ryanhcode.dev/releases'
+            content { includeGroup 'dev.ryanhcode.sable'; includeGroup 'dev.ryanhcode.sable-companion' }
+        }
+        maven {
+            url = 'https://cursemaven.com'
+            content { includeGroup 'curse.maven' }
+        }
+    }
+}
+
 base {
     archivesName = mod_id
 }
@@ -174,6 +201,17 @@ dependencies {
     runtimeOnly files(layeredSlopesJar).builtBy(tasks.named("downloadLayeredSlopes"))
     compileOnly files(layeredSlopeGradingJar).builtBy(tasks.named("downloadLayeredSlopeGrading"))
     runtimeOnly files(layeredSlopeGradingJar).builtBy(tasks.named("downloadLayeredSlopeGrading"))
+
+    if (divJar != null) {
+        compileOnly files(divJar)
+        runtimeOnly files(divJar)
+    }
+    if (pairedRuntime) {
+        // Exact coordinates DIV's own build.gradle pins for these three dependencies.
+        runtimeOnly('dev.ryanhcode.sable:sable-neoforge-1.21.1:2.0.5') { transitive = false }
+        runtimeOnly('dev.ryanhcode.sable-companion:sable-companion-common-1.21.1:1.6.0') { transitive = false }
+        runtimeOnly('curse.maven:minecraft-transport-simulator-286703:7926606') { transitive = false }
+    }
 
     testImplementation platform('org.junit:junit-bom:5.11.3')
     testImplementation 'org.junit.jupiter:junit-jupiter'
