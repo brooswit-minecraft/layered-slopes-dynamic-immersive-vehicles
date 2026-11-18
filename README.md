@@ -24,8 +24,8 @@ This is a bounded, multi-slice implementation. Current slice:
       dependency, no RNG draw, no world mutation — pure functions and unit tests only.
 - [x] NeoForge mod scaffold: main mod class, `neoforge.mods.toml`, pinned (sha512-verified)
       download-and-verify dependencies on `layered-slopes` (v0.2.0) and `layered-slope-grading`
-      (v0.1.0). Confirmed booting for real via `./gradlew runGameTestServer` (loads with 0 of 9
-      mandatory mod requirements missing).
+      (v0.1.0). `StandaloneBootGameTests` confirms a real boot via `./gradlew runGameTestServer`
+      (0 mod requirements missing), wired into CI with `scripts/check_gametest_count.py`.
 - [ ] DIV dependency and its contact-telemetry seam (per-wheel slip/load payload). Deferred: DIV
       ships no stable, sha512-pinnable GitHub Release at all (`gh release list` on that repo
       returns only private "not for publishing" draft test-builds), so it is not yet declared as
@@ -42,11 +42,14 @@ This is a bounded, multi-slice implementation. Current slice:
       whichever erosion consumer slice needs that coverage to implement and test it.
 - [x] Protection/dedup policy primitives: `ErosionDedup` (at most one roll-and-mutation attempt
       per dimension/block/tick, including a rejected attempt, with bounded per-tick lifecycle
-      storage) and `ErosionProtectionGate` (a hard, code-level gate defaulting to NOT asserted
-      -- fails closed -- that the erosion consumer must check before any real world mutation;
-      opening it requires an explicit, specific coverage description, never a vague claim).
-      Pure logic, no Minecraft/NeoForge dependency; the gate still records that full
-      propagation/neighbor/cave-in coverage is NOT yet implemented or asserted.
+      storage) and `ErosionProtectionGate`, which separates READINESS (`isReady()`: is a capable
+      `ProtectionAdapter` installed) from the actual per-attempt decision (`authorize(request)`):
+      the gate itself fails closed on missing/unknown mandatory request context (null dimension,
+      unknown propagation scope) before ever consulting the adapter, and otherwise still requires
+      the adapter's own per-request grant -- `isReady()` alone is never permission to mutate.
+      Pure logic, no Minecraft/NeoForge dependency. No production adapter exists yet, so every
+      real `authorize()` call is denied by construction; full propagation/neighbor/cave-in
+      coverage remains unimplemented.
 - [ ] Erosion consumer itself (server-thread authoritative, wiring the policy primitives above
       together with real per-wheel telemetry and `Smoothing.smooth()`, multiplayer sync, default
       OFF), the explicit propagation/claim-adapter protection implementation the gate above is
@@ -72,5 +75,7 @@ they are plain JUnit 5 tests with no Minecraft/NeoForge dependency.
 ```
 
 Boots a real dedicated server with this mod, `layered-slopes`, and `layered-slope-grading`
-installed. No GameTests exist yet (nothing to test until the erosion consumer lands), so this is
-currently just a real-boot smoke check, not run in CI yet -- see `scripts/check_gametest_count.py`.
+installed and runs `StandaloneBootGameTests` (one boot-only GameTest -- it proves the harness
+boots, not erosion/gameplay behavior). Wired into CI via `scripts/check_gametest_count.py`, which
+fails closed if the expected test count regresses. An opt-in `div-paired-runtime.yml` workflow
+additionally builds DIV fresh and boots everything together at DIV's real NeoForge floor.
