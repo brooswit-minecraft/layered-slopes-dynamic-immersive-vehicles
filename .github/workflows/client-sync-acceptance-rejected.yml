@@ -8,14 +8,16 @@ name: Client-sync acceptance, rejected/canceled unchanged case (opt-in)
 # destination genuinely unchanged from an already-connected client's own perspective, observed
 # for a bounded window AFTER the server has acknowledged the real denial.
 #
-# Uses a REAL vanilla protection mechanism, not a mock: spawn protection. server.properties sets
-# a real, nonzero spawn-protection radius, and /setworldspawn pins the world's real spawn point
-# exactly at the test source position, so ClaimProtection#mayMutate's real
-# MinecraftServer#isUnderSpawnProtection check genuinely denies the fake player used for the
-# erosion attempt's break-event preflight. The attempt uses the EXACT same guaranteed-chance
-# config/slip/load as the enabled case (client-sync-acceptance-enabled.yml), so the only reason
-# the attempt can be denied is this real protection check, never chance or direction -- requiring
-# the server to report the specific outcome=PROTECTED, not any other denial outcome.
+# Uses a REAL vanilla protection mechanism, not a mock: the world border. A first real attempt
+# tried spawn protection instead, but NeoForge's FakePlayer (which ClaimProtection's break-event
+# preflight uses) evidently bypasses it (outcome=APPLIED, not PROTECTED). ClaimProtection's own
+# FIRST, unconditional check -- !level.getWorldBorder().isWithinBounds(pos) -- involves no
+# FakePlayer at all: /worldborder shrinks the real border so its own max X falls exactly between
+# the source and destination X coordinates (deterministic exact comparison, not approximation).
+# The attempt uses the EXACT same guaranteed-chance config/slip/load as the enabled case
+# (client-sync-acceptance-enabled.yml), so the only reason the attempt can be denied is this real
+# border check, never chance or direction -- requiring the server to report the specific
+# outcome=PROTECTED, not any other denial outcome.
 #
 # Reuses ErosionClientSyncLiveProbe exactly as-is (no new Java code): it already reports
 # UNCHANGED when it finishes its bounded watch window with no transition observed, which is
@@ -65,11 +67,11 @@ jobs:
           online-mode=false
           server-port=25579
           level-seed=512
-          spawn-protection=16
+          spawn-protection=0
           EOF
           # Exact values ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG uses -- the ONLY
-          # reason this slice's forced attempt can be denied must be the real spawn-protection
-          # check below, never chance or direction.
+          # reason this slice's forced attempt can be denied must be the real world-border check
+          # below, never chance or direction.
           cat > server-side/run/config/layeredslopesdynamicimmersivevehicles-server.toml <<'EOF'
           erosionEnabled = true
           slipThresholdMs = 0.15
@@ -81,7 +83,7 @@ jobs:
           maxLoadFactor = 4.0
           EOF
 
-      - name: Boot a real server, pin real spawn protection over the test position, wait for join, watch the client's baseline, trigger the real-denial attempt, verify both endpoints stayed unchanged, then stop both gracefully
+      - name: Boot a real server, shrink the real world border to exclude the destination, wait for join, watch the client's baseline, trigger the real-denial attempt, verify both endpoints stayed unchanged, then stop both gracefully
         run: |
           set -o pipefail
           cd server-side
@@ -102,27 +104,36 @@ jobs:
             exit 1
           fi
 
-          # Pin the real world spawn exactly at the test source position so the real,
-          # nonzero spawn-protection radius above genuinely covers it, then set up the same
-          # deterministic block arrangement the enabled case uses (source=dirt, east=air,
-          # east-below=stone anchor, the other three horizontal neighbors=stone).
-          printf 'forceload add 0 0\n' > server-side/stdin.pipe
+          # The first real attempt at this slice tried real spawn-protection, but the fake
+          # player ClaimProtection uses for its break-event preflight evidently bypasses it
+          # (outcome=APPLIED, not PROTECTED) -- NeoForge's FakePlayer is apparently exempt.
+          # ClaimProtection#mayMutate's own FIRST check, the real world border
+          # (!level.getWorldBorder().isWithinBounds(pos)), involves no FakePlayer at all and is
+          # unconditional -- shrink it so the real border's own max X (center + half-size)
+          # falls exactly between the source and destination X coordinates: source at x=90 is
+          # inside (<= max), destination at x=91 is outside (> max), by deterministic exact
+          # comparison, not approximation. Keep the player and its connection well inside the
+          # border (near x=85) so only the destination itself is excluded.
+          printf 'worldborder center 0 0\n' > server-side/stdin.pipe
+          sleep 1
+          printf 'worldborder set 180\n' > server-side/stdin.pipe
+          sleep 2
+          printf 'forceload add 80 -10 100 10\n' > server-side/stdin.pipe
           sleep 2
           for attempt in 1 2 3 4 5; do
             {
-              printf 'setworldspawn 0 -59 0\n'
-              printf 'setblock 0 -59 0 minecraft:dirt\n'
-              printf 'setblock 1 -59 0 minecraft:air\n'
-              printf 'setblock 1 -60 0 minecraft:stone\n'
-              printf 'setblock -1 -59 0 minecraft:stone\n'
-              printf 'setblock 0 -59 1 minecraft:stone\n'
-              printf 'setblock 0 -59 -1 minecraft:stone\n'
+              printf 'setblock 90 -59 0 minecraft:dirt\n'
+              printf 'setblock 91 -59 0 minecraft:air\n'
+              printf 'setblock 91 -60 0 minecraft:stone\n'
+              printf 'setblock 89 -59 0 minecraft:stone\n'
+              printf 'setblock 90 -59 1 minecraft:stone\n'
+              printf 'setblock 90 -59 -1 minecraft:stone\n'
             } > server-side/stdin.pipe
             sleep 3
-            grep -qF 'Changed the block at 0, -59, 0' server-side/server-boot.log 2>/dev/null && break
+            grep -qF 'Changed the block at 90, -59, 0' server-side/server-boot.log 2>/dev/null && break
             echo "diagnostic: setup attempt $attempt did not land yet, retrying"
           done
-          if ! grep -qF 'Changed the block at 0, -59, 0' server-side/server-boot.log; then
+          if ! grep -qF 'Changed the block at 90, -59, 0' server-side/server-boot.log; then
             echo "::error::world setup never reached the server after 5 attempts -- see server-boot.log tail:"
             tail -20 server-side/server-boot.log
             kill -9 "$server_pid" 2>/dev/null || true
@@ -138,8 +149,8 @@ jobs:
           timeout 600 ./gradlew runClient --no-daemon \
               -PerosionClientSyncLiveProbe=true \
               -PerosionClientSyncQuickPlay=localhost:25579 \
-              -PerosionClientSyncLiveProbeSourcePos=0,-59,0 \
-              -PerosionClientSyncLiveProbeDestPos=1,-59,0 \
+              -PerosionClientSyncLiveProbeSourcePos=90,-59,0 \
+              -PerosionClientSyncLiveProbeDestPos=91,-59,0 \
               -PerosionClientSyncLiveProbeReadySignalFile="$(pwd)/client-ready-signal.txt" \
               -PerosionClientSyncLiveProbeOutputFile="$(pwd)/client-live-probe-result.txt" \
             > client-boot.log 2>&1 &
@@ -165,12 +176,9 @@ jobs:
             kill -9 "$server_pid" "$client_pid" "$xvfb_pid" 2>/dev/null || true
             exit 1
           fi
-          # Teleport well away from the protected test position so the real spawn-protection
-          # check is exercised by a position the player is merely watching, not standing on --
-          # the fake player ClaimProtection uses for its break-event preflight is independent of
-          # the real connected player's own position, but the client still needs to actually
-          # track the chunk at (0,-59,0)/(1,-59,0); a nearby position keeps both satisfied.
-          printf 'tp @a 2 -58 2\n' > server-side/stdin.pipe
+          # Move the connected player near the test area (well inside the border, away from its
+          # edge) so the client genuinely tracks the chunk containing both positions.
+          printf 'tp @a 85 -58 0\n' > server-side/stdin.pipe
           sleep 3
 
           # The client must signal it has genuinely captured a baseline from its own ClientLevel
@@ -193,7 +201,7 @@ jobs:
             exit 1
           fi
 
-          printf 'erosionclientsynctest 0 -59 0 5.0 300.0\n' > server-side/stdin.pipe
+          printf 'erosionclientsynctest 90 -59 0 5.0 300.0\n' > server-side/stdin.pipe
           sleep 3
           # Require the exact, specific real denial -- never a different outcome standing in for
           # it (NO_CHANCE, NO_VALID_DIRECTION, etc. would all also leave the world unchanged, but

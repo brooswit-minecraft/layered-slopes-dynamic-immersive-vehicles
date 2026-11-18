@@ -232,9 +232,11 @@ This is a bounded, multi-slice implementation. Current slice:
       `client-sync-acceptance-rejected.yml` workflow completes the pair -- a REAL, SPECIFIC
       denial (never merely the absence of a mutation, and never `NO_CHANCE`/a dropped command/a
       pre-attempt timeout/a disconnected client standing in for it). Uses a real vanilla
-      mechanism, not a mock: a nonzero `spawn-protection` radius plus `/setworldspawn` pinned
-      exactly at the test position, so `ClaimProtection#mayMutate`'s real
-      `isUnderSpawnProtection` check genuinely denies the attempt -- using the exact same
+      mechanism, not a mock: the world border, shrunk via `/worldborder` so its own real max
+      coordinate falls exactly between the source and destination positions, exercising
+      `ClaimProtection#mayMutate`'s own unconditional world-border check (no FakePlayer
+      involved, unlike spawn protection, which NeoForge's FakePlayer evidently bypasses) --
+      using the exact same
       guaranteed-chance config as the enabled case, so the only possible denial reason is this
       real protection check, requiring the server to report the specific `outcome=PROTECTED`.
       The already-connected client, watching both endpoints since before the attempt, must
