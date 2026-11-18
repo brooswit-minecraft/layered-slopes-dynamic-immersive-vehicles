@@ -173,9 +173,13 @@ This is a bounded, multi-slice implementation. Current slice:
       `Done (` startup line and all 3 expected mod ids in the real `Mod List`.
       `base-mods-isolation-smoke` boots `layered-slopes`/`layered-slope-grading` ALONE, this
       mod's jar deliberately absent, proving neither depends on this compat mod and both boot
-      standalone with no mutual linkage. No GameTests run in either job (a real production
-      server has no GameTest harness); success is the real startup/mod-list evidence, never a
-      bare process exit code.
+      standalone with no mutual linkage. Both jobs shut the server down via a REAL stdin `stop`
+      command (not a bare signal), asserting both a bounded clean exit and the real
+      vanilla/NeoForge shutdown log lines (review 55013); `replacement-stack-smoke` additionally
+      reads the real generated `layeredslopesdynamicimmersivevehicles-server.toml` and asserts it
+      genuinely defaults `erosionEnabled` to `false`. No GameTests run in either job (a real
+      production server has no GameTest harness); success is the real startup/shutdown/mod-list/
+      config evidence, never a bare process exit code.
 
       **Not yet covered, named explicitly** (review 55009): DIV-alone/base-DIV isolation, and
       the full DIV replacement stack (compat + DIV + layered-slopes/grading together) -- both

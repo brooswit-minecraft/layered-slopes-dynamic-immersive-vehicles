@@ -24,6 +24,17 @@ name: Pinned-jar smoke acceptance (opt-in)
 # evidence is the real "Done (" startup line plus the real Mod List naming exactly the expected
 # mod ids, the same discipline dependency-failure-acceptance.yml/incompatible-version-acceptance.yml
 # established: never trust a bare process exit code alone.
+#
+# Review 55013's required changes: shutdown is now sent as a REAL stdin "stop" command (via a
+# named pipe kept open so later writes never block), with a bounded wait for the process to exit
+# ON ITS OWN -- a SIGKILL is only ever a documented fallback, never the primary evidence, and the
+# real vanilla/NeoForge shutdown log lines (Stopping server/Saving worlds/All dimensions are
+# saved) are asserted too. `replacement-stack-smoke` also asserts the real generated
+# `layeredslopesdynamicimmersivevehicles-server.toml` actually defaults `erosionEnabled` to
+# `false` -- not assumed from the source code, read from the file the real packaged jar
+# genuinely wrote. This slice still does NOT install or boot DIV at all (no stable, pinnable
+# DIV release exists yet -- same blocker as the contact-telemetry seam); DIV-alone/base-DIV
+# isolation and the full DIV replacement stack remain explicitly open, see README.
 on:
   workflow_dispatch:
   pull_request:
@@ -31,6 +42,9 @@ on:
       - '.github/workflows/pinned-jar-smoke-acceptance.yml'
       - 'build.gradle'
       - 'gradle.properties'
+      - 'settings.gradle'
+      - 'gradle/wrapper/**'
+      - 'src/**'
 
 permissions:
   contents: read
@@ -67,10 +81,13 @@ jobs:
           cp build/layeredslopegrading/*.jar server/mods/
           ls -la server/mods/
 
-      - name: Boot the real distribution with the real packaged replacement stack
+      - name: Boot the real distribution with the real packaged replacement stack, then stop it gracefully
         working-directory: server
         run: |
-          timeout 150 ./run.sh --nogui < /dev/null > boot.log 2>&1 &
+          set -o pipefail
+          mkfifo stdin.pipe
+          exec 9<>stdin.pipe
+          timeout 150 ./run.sh --nogui < stdin.pipe > boot.log 2>&1 &
           boot_pid=$!
           for i in $(seq 1 60); do
             if grep -qE 'Done \(|FAILED TO START|ModLoadingException|Failed to start' boot.log 2>/dev/null; then
@@ -78,11 +95,27 @@ jobs:
             fi
             sleep 2
           done
+          # Real graceful shutdown via the server's own stdin "stop" command (not a signal) --
+          # review 55013's exact point: a bare pkill -9 is not evidence of clean shutdown.
+          echo "stop" > stdin.pipe
+          graceful=false
+          for i in $(seq 1 30); do
+            if ! kill -0 "$boot_pid" 2>/dev/null; then
+              graceful=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$graceful" != "true" ]; then
+            echo "::warning::server did not exit on its own within 30s of 'stop' -- force killing as a fallback, cleanup evidence below will reflect this"
+            kill -9 "$boot_pid" 2>/dev/null || true
+          fi
+          exec 9>&-
+          rm -f stdin.pipe
+          echo "graceful=${graceful}" > shutdown-status.txt
           cat boot.log
-          pkill -9 -f 'unix_args' 2>/dev/null || true
-          wait "$boot_pid" 2>/dev/null || true
 
-      - name: Verify a real, successful boot naming exactly the expected mod ids
+      - name: Verify a real, successful boot naming exactly the expected mod ids, a graceful shutdown, and the real default-OFF erosionEnabled config
         working-directory: server
         run: |
           if ! grep -q 'Done (' boot.log; then
@@ -95,13 +128,34 @@ jobs:
               exit 1
             fi
           done
-          echo "confirmed: the real packaged replacement stack booted successfully with all 3 expected mod ids"
+          if ! grep -qF 'graceful=true' shutdown-status.txt; then
+            echo "::error::the server did not exit on its own within 30s of the real stdin 'stop' command -- this is not evidence of clean shutdown"
+            exit 1
+          fi
+          if ! grep -qE 'Stopping server|Saving worlds|All dimensions are saved' boot.log; then
+            echo "::error::expected the real vanilla/NeoForge graceful-shutdown log lines (Stopping server/Saving worlds/All dimensions are saved) -- not found"
+            exit 1
+          fi
+          config="config/layeredslopesdynamicimmersivevehicles-server.toml"
+          if [ ! -f "$config" ]; then
+            echo "::error::expected the real generated config file at $config -- it was never written"
+            exit 1
+          fi
+          if ! grep -qE '^erosionEnabled\s*=\s*false' "$config"; then
+            echo "::error::expected the real generated config to default erosionEnabled to false, got:"
+            cat "$config"
+            exit 1
+          fi
+          echo "confirmed: the real packaged replacement stack booted successfully with all 3 expected mod ids, shut down gracefully via a real stdin 'stop' command, and its real generated config defaults erosionEnabled to false"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: replacement-stack-smoke-evidence
-          path: server/boot.log
+          path: |
+            server/boot.log
+            server/shutdown-status.txt
+            server/config/layeredslopesdynamicimmersivevehicles-server.toml
           if-no-files-found: warn
 
   base-mods-isolation-smoke:
@@ -133,10 +187,13 @@ jobs:
           cp build/layeredslopegrading/*.jar server/mods/
           ls -la server/mods/
 
-      - name: Boot the real distribution with ONLY the base mods, no compat mod at all
+      - name: Boot the real distribution with ONLY the base mods, no compat mod at all, then stop it gracefully
         working-directory: server
         run: |
-          timeout 150 ./run.sh --nogui < /dev/null > boot.log 2>&1 &
+          set -o pipefail
+          mkfifo stdin.pipe
+          exec 9<>stdin.pipe
+          timeout 150 ./run.sh --nogui < stdin.pipe > boot.log 2>&1 &
           boot_pid=$!
           for i in $(seq 1 60); do
             if grep -qE 'Done \(|FAILED TO START|ModLoadingException|Failed to start' boot.log 2>/dev/null; then
@@ -144,11 +201,25 @@ jobs:
             fi
             sleep 2
           done
+          echo "stop" > stdin.pipe
+          graceful=false
+          for i in $(seq 1 30); do
+            if ! kill -0 "$boot_pid" 2>/dev/null; then
+              graceful=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$graceful" != "true" ]; then
+            echo "::warning::server did not exit on its own within 30s of 'stop' -- force killing as a fallback, cleanup evidence below will reflect this"
+            kill -9 "$boot_pid" 2>/dev/null || true
+          fi
+          exec 9>&-
+          rm -f stdin.pipe
+          echo "graceful=${graceful}" > shutdown-status.txt
           cat boot.log
-          pkill -9 -f 'unix_args' 2>/dev/null || true
-          wait "$boot_pid" 2>/dev/null || true
 
-      - name: Verify a real, successful standalone boot with no mutual dependency on this compat mod
+      - name: Verify a real, successful standalone boot with no mutual dependency on this compat mod, and a graceful shutdown
         working-directory: server
         run: |
           if ! grep -q 'Done (' boot.log; then
@@ -165,11 +236,21 @@ jobs:
             echo "::error::found this compat mod's own modid in the Mod List, but its jar was deliberately never placed in mods/ -- something is wrong with this job's isolation"
             exit 1
           fi
-          echo "confirmed: layered-slopes and layered-slope-grading boot successfully standalone, with no dependency on this compat mod"
+          if ! grep -qF 'graceful=true' shutdown-status.txt; then
+            echo "::error::the server did not exit on its own within 30s of the real stdin 'stop' command -- this is not evidence of clean shutdown"
+            exit 1
+          fi
+          if ! grep -qE 'Stopping server|Saving worlds|All dimensions are saved' boot.log; then
+            echo "::error::expected the real vanilla/NeoForge graceful-shutdown log lines (Stopping server/Saving worlds/All dimensions are saved) -- not found"
+            exit 1
+          fi
+          echo "confirmed: layered-slopes and layered-slope-grading boot successfully standalone, with no dependency on this compat mod, and shut down gracefully via a real stdin 'stop' command"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: base-mods-isolation-smoke-evidence
-          path: server/boot.log
+          path: |
+            server/boot.log
+            server/shutdown-status.txt
           if-no-files-found: warn
