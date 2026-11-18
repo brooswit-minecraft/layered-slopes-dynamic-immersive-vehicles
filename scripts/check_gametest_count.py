@@ -13,11 +13,19 @@ log format against a real CI run: passing tests are only ever counted, never
 individually named, so only the completion/pass summary counts -- not a
 per-test-name substring check -- can work here.
 
-The first real GameTest exists now: StandaloneBootGameTests.theGameTestHarnessBootsForThisMod
-(a trivial helper.succeed() -- there is no erosion consumer or other gameplay behavior yet to
-test, only proof the harness itself boots for this mod). EXPECTED_REQUIRED_TEST_COUNT is that
-real count, 1 -- update it, never borrow a sibling mod's count or test-name list, as more real
-GameTests are added.
+StandaloneBootGameTests.theGameTestHarnessBootsForThisMod (a trivial helper.succeed() proving the
+harness boots) plus ErosionAttemptGameTests' 10 cases (default-closed denial, a granting adapter
+still denied because propagation scope is never claimed known in production, a known-scope
+granting adapter actually applying a move with material conservation, per-tick dedup, a denied
+attempt still consuming the dedup slot, a failed roll still consuming the dedup slot,
+no-valid-direction, an off-thread call denied before touching anything, an unloaded source
+denied without force-loading it, and a deterministic instrumented-seam test proving an unloaded
+destination is skipped before Smoothing/mutation ever runs for it) are the real GameTests as of
+this slice. A real-chunk-boundary version of that last case was implemented and passed locally
+but proved environment-dependent on a real CI runner and was reverted in favor of the
+instrumented-seam version -- see ErosionAttemptGameTests' trailing comment.
+EXPECTED_REQUIRED_TEST_COUNT is that real count, 11 -- update it, never borrow a sibling mod's
+count or test-name list, as more real GameTests are added.
 """
 import re
 import sys
@@ -30,8 +38,8 @@ class RuntimeEvidenceError(ValueError):
 
 UNSET = "UNSET"
 
-# StandaloneBootGameTests.theGameTestHarnessBootsForThisMod only, as of this slice.
-EXPECTED_REQUIRED_TEST_COUNT = 1
+# StandaloneBootGameTests (1) + ErosionAttemptGameTests (9), as of this slice.
+EXPECTED_REQUIRED_TEST_COUNT = 11
 
 
 def verify_runtime_log(log_text, expected=EXPECTED_REQUIRED_TEST_COUNT):
