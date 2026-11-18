@@ -145,6 +145,58 @@ class ErosionProtectionGateTest {
     }
 
     @Test
+    void missingDimensionIsDeniedBeforeEverReachingAnAlwaysGrantingAdapter() {
+        // Regression (review 54861/54863, PR comment 6968499181): the gate itself must fail
+        // closed on mandatory context it cannot even identify -- an adapter that unconditionally
+        // grants everything must never be able to launder a request the gate can't identify.
+        int[] adapterInvocations = {0};
+        ProtectionAdapter alwaysGrants = countingAdapter(adapterInvocations);
+        ErosionProtectionGate gate = new ErosionProtectionGate();
+        gate.assertCoverage(alwaysGrants);
+        MutationRequest missingDimension = new MutationRequest(null, 1, 2, 3, 4, 2, 3, true);
+        assertFalse(gate.authorize(missingDimension));
+        assertTrue(adapterInvocations[0] == 0, "the gate must deny missing-dimension requests without ever delegating to the adapter");
+    }
+
+    @Test
+    void unknownPropagationScopeIsDeniedBeforeEverReachingAnAlwaysGrantingAdapter() {
+        // Same regression as above, for the other mandatory-context field named in review
+        // 54861/54863: propagationScopeKnown == false must deny on its own, independent of
+        // whatever an always-granting adapter would have said.
+        int[] adapterInvocations = {0};
+        ProtectionAdapter alwaysGrants = countingAdapter(adapterInvocations);
+        ErosionProtectionGate gate = new ErosionProtectionGate();
+        gate.assertCoverage(alwaysGrants);
+        assertFalse(gate.authorize(REQUEST_UNKNOWN_PROPAGATION));
+        assertTrue(adapterInvocations[0] == 0, "the gate must deny unknown-propagation-scope requests without ever delegating to the adapter");
+    }
+
+    private static ProtectionAdapter countingAdapter(int[] invocationCounter) {
+        return new ProtectionAdapter() {
+            @Override
+            public boolean supportsSourceDestinationAuthorization() {
+                return true;
+            }
+
+            @Override
+            public boolean supportsNeighborCaveInPropagation() {
+                return true;
+            }
+
+            @Override
+            public String describe() {
+                return "always-granting adapter used only to prove the gate denies without delegating";
+            }
+
+            @Override
+            public boolean authorize(MutationRequest request) {
+                invocationCounter[0]++;
+                return true;
+            }
+        };
+    }
+
+    @Test
     void nullAdapterIsRejected() {
         ErosionProtectionGate gate = new ErosionProtectionGate();
         assertThrows(IllegalArgumentException.class, () -> gate.assertCoverage(null));

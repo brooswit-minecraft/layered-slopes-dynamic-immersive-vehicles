@@ -74,15 +74,26 @@ public final class ErosionProtectionGate {
     }
 
     /**
-     * The actual per-attempt authorization decision for {@code request}. {@code false} if no
-     * adapter is installed, if the installed adapter is not fully {@link #isReady() ready}, or
-     * if the ready adapter's own {@link ProtectionAdapter#authorize} denies this specific
-     * request -- any one of those is sufficient to deny; only all three conditions together
-     * (installed, ready, and the adapter's own per-request grant) authorize a mutation.
+     * The actual per-attempt authorization decision for {@code request}. Denies on its own,
+     * before ever consulting the adapter, if the request's mandatory context is missing or
+     * unknown ({@code dimension == null} or {@code propagationScopeKnown == false}) -- an
+     * adapter that unconditionally grants every request must not be able to launder a request
+     * this gate itself cannot even identify. Otherwise {@code false} if no adapter is installed,
+     * if the installed adapter is not fully {@link #isReady() ready}, or if the ready adapter's
+     * own {@link ProtectionAdapter#authorize} denies this specific request -- any one of those
+     * is sufficient to deny; only all conditions together (identifiable context, installed,
+     * ready, and the adapter's own per-request grant) authorize a mutation.
      */
     public boolean authorize(MutationRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("request must not be null");
+        }
+        // Fail closed on missing/unknown mandatory context ourselves, before ever reaching the
+        // adapter -- an adapter that unconditionally grants must not be able to launder a
+        // request this gate itself cannot even identify (review 54861/54863, PR comment
+        // 6968499181).
+        if (request.dimension() == null || !request.propagationScopeKnown()) {
+            return false;
         }
         ProtectionAdapter current = adapter;
         if (current == null) {
