@@ -14,17 +14,17 @@ individually named, so only the completion/pass summary counts -- not a
 per-test-name substring check -- can work here.
 
 StandaloneBootGameTests.theGameTestHarnessBootsForThisMod (a trivial helper.succeed() proving the
-harness boots) plus ErosionAttemptGameTests' 10 cases (default-closed denial, a granting adapter
-still denied because propagation scope is never claimed known in production, a known-scope
-granting adapter actually applying a move with material conservation, per-tick dedup, a denied
-attempt still consuming the dedup slot, a failed roll still consuming the dedup slot,
-no-valid-direction, an off-thread call denied before touching anything, an unloaded source
+harness boots) plus ErosionAttemptGameTests' 11 cases: a real move applying and conserving
+material with no claim mod/Dynamic Terrain installed (the "missing/unsupported integration"
+success case), a protected source, a protected destination, and a detected neighbor cave-in risk
+each denying, per-tick dedup, a denied attempt and a failed roll each still consuming the dedup
+slot, no-valid-direction, an off-thread call denied before touching anything, an unloaded source
 denied without force-loading it, and a deterministic instrumented-seam test proving an unloaded
-destination is skipped before Smoothing/mutation ever runs for it) are the real GameTests as of
-this slice. A real-chunk-boundary version of that last case was implemented and passed locally
-but proved environment-dependent on a real CI runner and was reverted in favor of the
-instrumented-seam version -- see ErosionAttemptGameTests' trailing comment.
-EXPECTED_REQUIRED_TEST_COUNT is that real count, 11 -- update it, never borrow a sibling mod's
+destination is skipped before Smoothing/mutation ever runs for it. These replaced an earlier
+design (ErosionProtectionGate/ProtectionAdapter-routed checks) found three separate times to
+overclaim a capability it did not verify (review 54855/54861/54878/54890/54899/54901) --
+ClaimProtection and DynamicTerrainCaveInRisk are real, direct, unconditional checks instead.
+EXPECTED_REQUIRED_TEST_COUNT is that real count, 12 -- update it, never borrow a sibling mod's
 count or test-name list, as more real GameTests are added.
 """
 import re
@@ -39,7 +39,7 @@ class RuntimeEvidenceError(ValueError):
 UNSET = "UNSET"
 
 # StandaloneBootGameTests (1) + ErosionAttemptGameTests (9), as of this slice.
-EXPECTED_REQUIRED_TEST_COUNT = 11
+EXPECTED_REQUIRED_TEST_COUNT = 12
 
 
 def verify_runtime_log(log_text, expected=EXPECTED_REQUIRED_TEST_COUNT):

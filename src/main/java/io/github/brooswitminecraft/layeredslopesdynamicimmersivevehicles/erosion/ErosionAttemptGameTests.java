@@ -1,10 +1,12 @@
 package io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion;
 
+import io.github.brooswitminecraft.layeredslopegrading.Smoothing;
 import io.github.brooswitminecraft.layeredslopes.LayeredBlock;
 import io.github.brooswitminecraft.layeredslopes.LayeredSlopesMod;
 import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.LayeredSlopesDynamicImmersiveVehiclesMod;
 
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -18,9 +20,10 @@ import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
 /**
- * Acceptance evidence for {@link ErosionAttempt}, the real orchestration of dedup, the accepted
- * MINECRAFT-555 slip-to-probability roll, direction selection, and the {@link
- * ErosionProtectionGate} -- not just each primitive in isolation.
+ * Acceptance evidence for {@link ErosionAttempt}: dedup, the accepted MINECRAFT-555
+ * slip-to-probability roll, direction selection, the real {@link ClaimProtection} check, and the
+ * real {@link DynamicTerrainCaveInRisk} check -- not just each primitive in isolation, and never
+ * via an adapter that overclaims what it verifies (review 54855/54861/54878/54890/54899/54901).
  *
  * <p>{@code GUARANTEED_CHANCE_CONFIG} is deliberately extreme-but-valid (not the production
  * defaults) so the roll outcome is guaranteed regardless of {@code RandomSource} seed: chance
@@ -42,30 +45,6 @@ public final class ErosionAttemptGameTests {
     private static final double REFERENCE_LOAD_KG = 300.0;
     private static final double TINY_CHANCE_SLIP_MS = 0.16; // just above DEFAULT's 0.15 threshold
 
-    private static ErosionProtectionGate.ProtectionAdapter grantingAdapter() {
-        return new ErosionProtectionGate.ProtectionAdapter() {
-            @Override
-            public boolean supportsSourceDestinationAuthorization() {
-                return true;
-            }
-
-            @Override
-            public boolean supportsNeighborCaveInPropagation() {
-                return true;
-            }
-
-            @Override
-            public String describe() {
-                return "GameTest-only adapter that grants every request, used to exercise the APPLIED path";
-            }
-
-            @Override
-            public boolean authorize(ErosionProtectionGate.MutationRequest request) {
-                return true;
-            }
-        };
-    }
-
     /**
      * EAST is the only candidate direction {@code canSmooth} can accept: the other three are
      * explicitly STONE (a different, blocking material -- {@code SmoothRules.Destination.BLOCKED})
@@ -84,69 +63,33 @@ public final class ErosionAttemptGameTests {
         }
     }
 
-    @GameTest(template = "flat_platform")
-    public static void defaultClosedGateDeniesEvenWhenRollAndDirectionWouldOtherwiseSucceed(GameTestHelper helper) {
-        BlockPos pos = new BlockPos(1, 2, 1);
-        placeSourceWithOneValidEastNeighbor(helper, pos);
-        BlockState before = helper.getBlockState(pos);
-
-        ErosionProtectionGate gate = new ErosionProtectionGate(); // no adapter installed: fails closed
-        ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(
-                (ServerLevel) helper.getLevel(), helper.absolutePos(pos),
-                SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
-                GUARANTEED_CHANCE_CONFIG, new ErosionDedup(), gate);
-
-        helper.assertTrue(outcome == ErosionAttempt.Outcome.DENIED_BY_PROTECTION,
-                "expected DENIED_BY_PROTECTION with no adapter installed, got " + outcome);
-        helper.assertTrue(helper.getBlockState(pos).equals(before),
-                "the world must stay unmutated when protection denies the only valid direction");
-        helper.succeed();
+    private static ErosionAttempt.Hooks realHooksExcept(ServerLevel level,
+            Predicate<BlockPos> destinationLoaded, ErosionAttempt.SmoothFeasibilityCheck canSmooth,
+            ErosionAttempt.ClaimCheck claim, ErosionAttempt.CaveInRiskCheck caveInRisk) {
+        return new ErosionAttempt.Hooks(
+                destinationLoaded != null ? destinationLoaded : level::hasChunkAt,
+                canSmooth != null ? canSmooth : Smoothing::canSmooth,
+                claim != null ? claim : ClaimProtection::mayMutate,
+                caveInRisk != null ? caveInRisk : DynamicTerrainCaveInRisk::isPresent);
     }
 
     /**
-     * Regression (review 54878 finding 1): a request this orchestration cannot yet claim a real
-     * propagation scope for must be denied EVEN BY A FULLY GRANTING ADAPTER -- the production
-     * {@code attempt()} overload always builds requests with {@code propagationScopeKnown=false}
-     * since no neighbor/cave-in consequence analysis exists anywhere in this mod yet.
-     */
-    @GameTest(template = "flat_platform")
-    public static void evenAGrantingAdapterCannotApplyBecausePropagationScopeIsNeverClaimedKnown(GameTestHelper helper) {
-        BlockPos pos = new BlockPos(1, 2, 1);
-        placeSourceWithOneValidEastNeighbor(helper, pos);
-        BlockState before = helper.getBlockState(pos);
-
-        ErosionProtectionGate gate = new ErosionProtectionGate();
-        gate.assertCoverage(grantingAdapter());
-        ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(
-                (ServerLevel) helper.getLevel(), helper.absolutePos(pos),
-                SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
-                GUARANTEED_CHANCE_CONFIG, new ErosionDedup(), gate);
-
-        helper.assertTrue(outcome == ErosionAttempt.Outcome.DENIED_BY_PROTECTION,
-                "a granting adapter must still not help: propagationScopeKnown is always false in production, got " + outcome);
-        helper.assertTrue(helper.getBlockState(pos).equals(before), "the world must stay unmutated");
-        helper.succeed();
-    }
-
-    /**
-     * Exercises the direction-selection/{@code Smoothing.smooth} mechanics via the package-only
-     * test seam (propagation scope claimed known) -- proving the mechanism itself is correct,
-     * independent of the separate, deliberate "never claim known in production" policy above.
+     * The default, real-hooks path in an ordinary GameTest world (no claim mod, no Dynamic
+     * Terrain) -- the "missing/unsupported integration" case review 54901/54904 required: with
+     * nothing installed to deny anything, the real checks correctly let a genuine move apply.
      * Also verifies material conservation: a full 16-layer-equivalent dirt block splits into
      * exactly 15 (source) + 1 (destination) layers, not lost or duplicated.
      */
     @GameTest(template = "flat_platform")
-    public static void aKnownPropagationScopeWithAGrantingAdapterAppliesAndConservesMaterial(GameTestHelper helper) {
+    public static void withNoClaimModOrDynamicTerrainInstalledARealMoveStillAppliesAndConservesMaterial(GameTestHelper helper) {
         BlockPos pos = new BlockPos(1, 2, 1);
         BlockPos destPos = pos.relative(Direction.EAST);
         placeSourceWithOneValidEastNeighbor(helper, pos);
 
-        ErosionProtectionGate gate = new ErosionProtectionGate();
-        gate.assertCoverage(grantingAdapter());
         ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(
                 (ServerLevel) helper.getLevel(), helper.absolutePos(pos),
                 SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
-                GUARANTEED_CHANCE_CONFIG, new ErosionDedup(), gate, true);
+                GUARANTEED_CHANCE_CONFIG, new ErosionDedup());
 
         helper.assertTrue(outcome == ErosionAttempt.Outcome.APPLIED, "expected APPLIED, got " + outcome);
         helper.assertTrue(helper.getBlockState(pos).getBlock() == LayeredSlopesMod.LAYERED_DIRT.get(),
@@ -160,23 +103,80 @@ public final class ErosionAttemptGameTests {
         helper.succeed();
     }
 
+    /** Regression (review 54901/54904): a protected SOURCE must deny, leaving the world unmutated. */
+    @GameTest(template = "flat_platform")
+    public static void aProtectedSourceDeniesEvenWhenEverythingElseWouldSucceed(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 2, 1);
+        placeSourceWithOneValidEastNeighbor(helper, pos);
+        BlockState before = helper.getBlockState(pos);
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos absolutePos = helper.absolutePos(pos);
+
+        ErosionAttempt.ClaimCheck denySource = (lvl, candidate) -> !candidate.equals(absolutePos);
+        ErosionAttempt.Hooks hooks = realHooksExcept(level, null, null, denySource, null);
+        ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(level, absolutePos,
+                SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
+                GUARANTEED_CHANCE_CONFIG, new ErosionDedup(), hooks);
+
+        helper.assertTrue(outcome == ErosionAttempt.Outcome.PROTECTED, "expected PROTECTED, got " + outcome);
+        helper.assertTrue(helper.getBlockState(pos).equals(before), "the world must stay unmutated");
+        helper.succeed();
+    }
+
+    /** Regression (review 54901/54904): a protected DESTINATION must deny, leaving the world unmutated. */
+    @GameTest(template = "flat_platform")
+    public static void aProtectedDestinationDeniesEvenWhenEverythingElseWouldSucceed(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 2, 1);
+        BlockPos eastDestination = pos.relative(Direction.EAST);
+        placeSourceWithOneValidEastNeighbor(helper, pos);
+        BlockState before = helper.getBlockState(pos);
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos absoluteDestination = helper.absolutePos(eastDestination);
+
+        ErosionAttempt.ClaimCheck denyDestination = (lvl, candidate) -> !candidate.equals(absoluteDestination);
+        ErosionAttempt.Hooks hooks = realHooksExcept(level, null, null, denyDestination, null);
+        ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(level, helper.absolutePos(pos),
+                SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
+                GUARANTEED_CHANCE_CONFIG, new ErosionDedup(), hooks);
+
+        helper.assertTrue(outcome == ErosionAttempt.Outcome.PROTECTED, "expected PROTECTED, got " + outcome);
+        helper.assertTrue(helper.getBlockState(pos).equals(before), "the world must stay unmutated");
+        helper.succeed();
+    }
+
+    /** Regression (review 54876/54899/54904): a detected cave-in risk must deny, leaving the world unmutated. */
+    @GameTest(template = "flat_platform")
+    public static void aDetectedNeighborCaveInRiskDeniesEvenWhenEverythingElseWouldSucceed(GameTestHelper helper) {
+        BlockPos pos = new BlockPos(1, 2, 1);
+        placeSourceWithOneValidEastNeighbor(helper, pos);
+        BlockState before = helper.getBlockState(pos);
+        ServerLevel level = (ServerLevel) helper.getLevel();
+
+        ErosionAttempt.CaveInRiskCheck alwaysRisky = (lvl, src, dst) -> true;
+        ErosionAttempt.Hooks hooks = realHooksExcept(level, null, null, null, alwaysRisky);
+        ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(level, helper.absolutePos(pos),
+                SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
+                GUARANTEED_CHANCE_CONFIG, new ErosionDedup(), hooks);
+
+        helper.assertTrue(outcome == ErosionAttempt.Outcome.NEIGHBOR_CAVE_IN_RISK, "expected NEIGHBOR_CAVE_IN_RISK, got " + outcome);
+        helper.assertTrue(helper.getBlockState(pos).equals(before), "the world must stay unmutated");
+        helper.succeed();
+    }
+
     @GameTest(template = "flat_platform")
     public static void dedupPreventsASecondClaimInTheSameTick(GameTestHelper helper) {
         BlockPos pos = new BlockPos(1, 2, 1);
         placeSourceWithOneValidEastNeighbor(helper, pos);
-
-        ErosionProtectionGate gate = new ErosionProtectionGate();
-        gate.assertCoverage(grantingAdapter());
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos absolutePos = helper.absolutePos(pos);
         ErosionDedup dedup = new ErosionDedup();
 
-        ErosionAttempt.Outcome first = ErosionAttempt.attempt(
-                (ServerLevel) helper.getLevel(), helper.absolutePos(pos),
+        ErosionAttempt.Outcome first = ErosionAttempt.attempt(level, absolutePos,
                 SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
-                GUARANTEED_CHANCE_CONFIG, dedup, gate, true);
-        ErosionAttempt.Outcome second = ErosionAttempt.attempt(
-                (ServerLevel) helper.getLevel(), helper.absolutePos(pos),
+                GUARANTEED_CHANCE_CONFIG, dedup);
+        ErosionAttempt.Outcome second = ErosionAttempt.attempt(level, absolutePos,
                 SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(2),
-                GUARANTEED_CHANCE_CONFIG, dedup, gate, true);
+                GUARANTEED_CHANCE_CONFIG, dedup);
 
         helper.assertTrue(first == ErosionAttempt.Outcome.APPLIED, "expected first attempt APPLIED, got " + first);
         helper.assertTrue(second == ErosionAttempt.Outcome.DUPLICATE_THIS_TICK,
@@ -189,20 +189,20 @@ public final class ErosionAttemptGameTests {
     public static void aDeniedAttemptStillConsumesTheDedupSlot(GameTestHelper helper) {
         BlockPos pos = new BlockPos(1, 2, 1);
         placeSourceWithOneValidEastNeighbor(helper, pos);
-
-        ErosionProtectionGate gate = new ErosionProtectionGate(); // no adapter: every attempt denied
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos absolutePos = helper.absolutePos(pos);
         ErosionDedup dedup = new ErosionDedup();
 
-        ErosionAttempt.Outcome first = ErosionAttempt.attempt(
-                (ServerLevel) helper.getLevel(), helper.absolutePos(pos),
+        ErosionAttempt.ClaimCheck denyEverything = (lvl, candidate) -> false;
+        ErosionAttempt.Hooks hooks = realHooksExcept(level, null, null, denyEverything, null);
+        ErosionAttempt.Outcome first = ErosionAttempt.attempt(level, absolutePos,
                 SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
-                GUARANTEED_CHANCE_CONFIG, dedup, gate);
-        ErosionAttempt.Outcome second = ErosionAttempt.attempt(
-                (ServerLevel) helper.getLevel(), helper.absolutePos(pos),
+                GUARANTEED_CHANCE_CONFIG, dedup, hooks);
+        ErosionAttempt.Outcome second = ErosionAttempt.attempt(level, absolutePos,
                 SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(2),
-                GUARANTEED_CHANCE_CONFIG, dedup, gate);
+                GUARANTEED_CHANCE_CONFIG, dedup, hooks);
 
-        helper.assertTrue(first == ErosionAttempt.Outcome.DENIED_BY_PROTECTION, "expected first DENIED_BY_PROTECTION, got " + first);
+        helper.assertTrue(first == ErosionAttempt.Outcome.PROTECTED, "expected first PROTECTED, got " + first);
         helper.assertTrue(second == ErosionAttempt.Outcome.DUPLICATE_THIS_TICK,
                 "a denied attempt must still have consumed the dedup slot, got " + second);
         helper.succeed();
@@ -219,19 +219,16 @@ public final class ErosionAttemptGameTests {
     public static void aFailedRollStillConsumesTheDedupSlot(GameTestHelper helper) {
         BlockPos pos = new BlockPos(1, 2, 1);
         placeSourceWithOneValidEastNeighbor(helper, pos);
-
-        ErosionProtectionGate gate = new ErosionProtectionGate();
-        gate.assertCoverage(grantingAdapter());
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos absolutePos = helper.absolutePos(pos);
         ErosionDedup dedup = new ErosionDedup();
 
-        ErosionAttempt.Outcome first = ErosionAttempt.attempt(
-                (ServerLevel) helper.getLevel(), helper.absolutePos(pos),
+        ErosionAttempt.Outcome first = ErosionAttempt.attempt(level, absolutePos,
                 TINY_CHANCE_SLIP_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
-                ErosionConfig.DEFAULT, dedup, gate, true);
-        ErosionAttempt.Outcome second = ErosionAttempt.attempt(
-                (ServerLevel) helper.getLevel(), helper.absolutePos(pos),
+                ErosionConfig.DEFAULT, dedup);
+        ErosionAttempt.Outcome second = ErosionAttempt.attempt(level, absolutePos,
                 TINY_CHANCE_SLIP_MS, REFERENCE_LOAD_KG, RandomSource.create(2),
-                ErosionConfig.DEFAULT, dedup, gate, true);
+                ErosionConfig.DEFAULT, dedup);
 
         helper.assertTrue(first == ErosionAttempt.Outcome.ROLL_FAILED, "expected first ROLL_FAILED, got " + first);
         helper.assertTrue(second == ErosionAttempt.Outcome.DUPLICATE_THIS_TICK,
@@ -248,12 +245,10 @@ public final class ErosionAttemptGameTests {
         }
         BlockState before = helper.getBlockState(pos);
 
-        ErosionProtectionGate gate = new ErosionProtectionGate();
-        gate.assertCoverage(grantingAdapter());
         ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(
                 (ServerLevel) helper.getLevel(), helper.absolutePos(pos),
                 SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
-                GUARANTEED_CHANCE_CONFIG, new ErosionDedup(), gate);
+                GUARANTEED_CHANCE_CONFIG, new ErosionDedup());
 
         helper.assertTrue(outcome == ErosionAttempt.Outcome.NO_VALID_DIRECTION,
                 "expected NO_VALID_DIRECTION when every horizontal neighbor is a different, blocking material, got " + outcome);
@@ -272,12 +267,9 @@ public final class ErosionAttemptGameTests {
         BlockPos pos = new BlockPos(1, 2, 1);
         placeSourceWithOneValidEastNeighbor(helper, pos);
         BlockState before = helper.getBlockState(pos);
-
-        ErosionProtectionGate gate = new ErosionProtectionGate();
-        gate.assertCoverage(grantingAdapter());
-        ErosionDedup dedup = new ErosionDedup();
         ServerLevel level = (ServerLevel) helper.getLevel();
         BlockPos absolutePos = helper.absolutePos(pos);
+        ErosionDedup dedup = new ErosionDedup();
 
         AtomicReference<ErosionAttempt.Outcome> offThreadOutcome = new AtomicReference<>();
         AtomicReference<Throwable> offThreadError = new AtomicReference<>();
@@ -285,7 +277,7 @@ public final class ErosionAttemptGameTests {
             try {
                 offThreadOutcome.set(ErosionAttempt.attempt(level, absolutePos,
                         SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
-                        GUARANTEED_CHANCE_CONFIG, dedup, gate, true));
+                        GUARANTEED_CHANCE_CONFIG, dedup));
             } catch (Throwable t) {
                 offThreadError.set(t);
             }
@@ -325,7 +317,7 @@ public final class ErosionAttemptGameTests {
 
         ErosionAttempt.Outcome onThreadOutcome = ErosionAttempt.attempt(level, absolutePos,
                 SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(2),
-                GUARANTEED_CHANCE_CONFIG, dedup, gate, true);
+                GUARANTEED_CHANCE_CONFIG, dedup);
         helper.assertTrue(onThreadOutcome == ErosionAttempt.Outcome.APPLIED,
                 "the off-thread call must not have consumed the dedup slot -- a same-tick on-thread call should still apply, got "
                         + onThreadOutcome);
@@ -340,15 +332,12 @@ public final class ErosionAttemptGameTests {
     public static void anUnloadedSourceIsDeniedWithoutForceLoadingItOrConsumingTheDedupSlot(GameTestHelper helper) {
         ServerLevel level = (ServerLevel) helper.getLevel();
         BlockPos farAwayPos = new BlockPos(1_000_000, 64, 1_000_000); // far outside any loaded/ticketed chunk
-
-        ErosionProtectionGate gate = new ErosionProtectionGate();
-        gate.assertCoverage(grantingAdapter());
         ErosionDedup dedup = new ErosionDedup();
 
         helper.assertTrue(!level.hasChunkAt(farAwayPos), "test precondition: this position must start out unloaded");
         ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(level, farAwayPos,
                 SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
-                GUARANTEED_CHANCE_CONFIG, dedup, gate, true);
+                GUARANTEED_CHANCE_CONFIG, dedup);
 
         helper.assertTrue(outcome == ErosionAttempt.Outcome.SOURCE_NOT_LOADED, "expected SOURCE_NOT_LOADED, got " + outcome);
         helper.assertTrue(!level.hasChunkAt(farAwayPos), "the call must not have force-loaded the chunk as a side effect");
@@ -356,23 +345,16 @@ public final class ErosionAttemptGameTests {
         helper.succeed();
     }
 
-    // A real "loaded source, unloaded destination" GameTest (review 54883) was implemented and
-    // passed locally, but proved environment-dependent: on the actual GitHub Actions runner the
-    // destination chunk it depended on staying unloaded was NOT unloaded, failing its own
-    // precondition, while the identical test passed repeatedly on this local sandbox. Rather than
-    // ship a test whose outcome depends on chunk-loading behavior that differs between
-    // environments for reasons not fully diagnosed, it was reverted in favor of the deterministic
-    // instrumented-seam test below (review 54884/54886/54888).
-
     /**
      * Regression (review 54884/54886/54888/54890): proves the destination-loaded check is
      * ordered before {@code Smoothing.canSmooth} itself is ever queried for that candidate --
      * not merely that no mutation happened, which a reordered implementation (query first, skip
-     * mutation after) could still satisfy. {@code canSmoothCheck} throws if ever invoked for the
-     * faked-unloaded EAST destination; it delegates to the real {@code Smoothing.canSmooth} for
-     * every other direction, so the blocked WEST/NORTH/SOUTH candidates are still exercised
-     * normally. Deterministic regardless of environment -- no real chunk-loading behavior
-     * involved, unlike the reverted real-chunk attempt above.
+     * mutation after) could still satisfy. {@code failIfQueriedForEastDestination} throws if
+     * ever invoked for the faked-unloaded EAST destination; it delegates to the real
+     * {@code Smoothing.canSmooth} for every other direction, so the blocked WEST/NORTH/SOUTH
+     * candidates are still exercised normally. Deterministic regardless of environment -- no
+     * real chunk-loading behavior involved, unlike an earlier, reverted real-chunk attempt at
+     * this same regression (review 54883).
      */
     @GameTest(template = "flat_platform")
     public static void anUnloadedDestinationIsSkippedBeforeAnySmoothingOrMutationCall(GameTestHelper helper) {
@@ -380,25 +362,23 @@ public final class ErosionAttemptGameTests {
         BlockPos eastDestination = pos.relative(Direction.EAST);
         placeSourceWithOneValidEastNeighbor(helper, pos);
         BlockState destinationBefore = helper.getBlockState(eastDestination);
-
-        ErosionProtectionGate gate = new ErosionProtectionGate();
-        gate.assertCoverage(grantingAdapter());
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        BlockPos absolutePos = helper.absolutePos(pos);
         BlockPos absoluteEastDestination = helper.absolutePos(eastDestination);
-        java.util.function.Predicate<BlockPos> fakeUnloadedAtEastDestinationOnly =
-                candidate -> !candidate.equals(absoluteEastDestination);
+
+        Predicate<BlockPos> fakeUnloadedAtEastDestinationOnly = candidate -> !candidate.equals(absoluteEastDestination);
         ErosionAttempt.SmoothFeasibilityCheck failIfQueriedForEastDestination = (lvl, candidatePos, direction) -> {
             if (direction == Direction.EAST) {
                 throw new AssertionError("Smoothing.canSmooth must never be queried for a candidate "
                         + "whose destination chunk the loaded-check reported as unloaded");
             }
-            return io.github.brooswitminecraft.layeredslopegrading.Smoothing.canSmooth(lvl, candidatePos, direction);
+            return Smoothing.canSmooth(lvl, candidatePos, direction);
         };
+        ErosionAttempt.Hooks hooks = realHooksExcept(level, fakeUnloadedAtEastDestinationOnly, failIfQueriedForEastDestination, null, null);
 
-        ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(
-                (ServerLevel) helper.getLevel(), helper.absolutePos(pos),
+        ErosionAttempt.Outcome outcome = ErosionAttempt.attempt(level, absolutePos,
                 SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, RandomSource.create(1),
-                GUARANTEED_CHANCE_CONFIG, new ErosionDedup(), gate, true,
-                fakeUnloadedAtEastDestinationOnly, failIfQueriedForEastDestination);
+                GUARANTEED_CHANCE_CONFIG, new ErosionDedup(), hooks);
 
         helper.assertTrue(outcome == ErosionAttempt.Outcome.NO_VALID_DIRECTION,
                 "the only real candidate's destination was faked unloaded, so it must be skipped entirely, got " + outcome);
