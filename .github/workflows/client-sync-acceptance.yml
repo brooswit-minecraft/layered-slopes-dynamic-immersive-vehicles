@@ -126,6 +126,18 @@ jobs:
           printf 'erosionclientsynctest 0 -59 0 0 0\n' > server-side/stdin.pipe
           sleep 3
           tail -10 server-side/server-boot.log
+          # Review finding (exact head fce95a4): the workflow checked only the client's
+          # resulting block state, never that the forced attempt actually reported
+          # Outcome.DISABLED -- it would have silently passed even if the command were
+          # missing/dropped/errored, or returned a different non-mutating outcome like
+          # NO_CHANCE (the 0/0 slip/load inputs could cause that too), since dirt remains
+          # unchanged either way. Require the exact real outcome explicitly.
+          if ! grep -qF 'erosionclientsynctest outcome=DISABLED' server-side/server-boot.log; then
+            echo "::error::expected 'erosionclientsynctest outcome=DISABLED' in the server log -- the forced attempt did not report the expected outcome. server-boot.log tail:"
+            tail -20 server-side/server-boot.log
+            kill -9 "$server_pid" 2>/dev/null || true
+            exit 1
+          fi
 
           # Run our own Xvfb on a known, fixed display (rather than xvfb-run's auto-picked one)
           # so a screenshot/thread-dump tool can actually target it -- direction 55083's
