@@ -14,8 +14,10 @@ bump: minor
     replacement stack together, requiring the real `Done (` line, all 7 expected mod ids,
     the absence of any real `ModLoadingException`/`FAILED TO START` failure marker, a real
     graceful shutdown, and the real generated config
-    defaulting `erosionEnabled` to `false`. Records an immutable sha256/sha512 artifact-hash
-    manifest naming the DIV commit SHA and every jar's hash.
+    defaulting `erosionEnabled` to `false`. Records an immutable manifest naming the DIV commit
+    SHA, the existing layered-slopes/layered-slope-grading version+sha512 pins, and a
+    deterministic filename:sha256 mapping for every jar actually placed in `server/mods/` and
+    booted -- not merely the DIV and compat jars alone.
 
   Neither job runs any GameTest (a real production server has no GameTest harness); success
   evidence is the real startup/shutdown/mod-list/config/manifest content, never a bare process

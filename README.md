@@ -197,9 +197,11 @@ This is a bounded, multi-slice implementation. Current slice:
       marker, a real graceful shutdown (all three
       vanilla/NeoForge shutdown markers independently), and the real generated
       `layeredslopesdynamicimmersivevehicles-server.toml` genuinely defaulting `erosionEnabled` to
-      `false`. Records an immutable sha256/sha512 artifact-hash manifest naming the DIV commit SHA,
-      the DIV jar's hash, this mod's own jar's hash, and the existing layered-slopes/
-      layered-slope-grading version+sha512 pins. Neither job runs any GameTest; success is the
+      `false`. Records an immutable manifest naming the DIV commit SHA, the existing layered-slopes/
+      layered-slope-grading version+sha512 pins, and a deterministic filename:sha256 mapping for
+      every single jar actually placed in `server/mods/` and booted -- DIV's own jar, this mod's
+      own packaged jar, all three paired-runtime deps, and both base mods -- not merely the DIV
+      and compat jars alone. Neither job runs any GameTest; success is the
       real startup/shutdown/mod-list/config/manifest content, never a bare process exit code. This
       is independent of the MINECRAFT-545-gated `PhysicsBridge`/contact-telemetry work below, which
       remains a real, separate hold.
