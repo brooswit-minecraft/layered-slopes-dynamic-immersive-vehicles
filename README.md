@@ -226,9 +226,8 @@ This is a bounded, multi-slice implementation. Current slice:
       conservation `ErosionAttemptGameTests` already proves in isolation, now proven live from an
       actual connected client's own perspective, using the exact same deterministic block
       arrangement and `GUARANTEED_CHANCE_CONFIG` values.
-- [ ] Client-sync acceptance, rejected/canceled-unchanged case, with LIVE post-join evidence --
-      implemented, not yet CI-verified (direction, comment 55058/55111/55114/55137): a third
-      opt-in
+- [x] Client-sync acceptance, rejected/canceled-unchanged case, with LIVE post-join evidence
+      (direction, comment 55058/55111/55114/55137): a third opt-in
       `client-sync-acceptance-rejected.yml` workflow completes the pair -- a REAL, SPECIFIC
       denial (never merely the absence of a mutation, and never `NO_CHANCE`/a dropped command/a
       pre-attempt timeout/a disconnected client standing in for it). Uses a real vanilla
