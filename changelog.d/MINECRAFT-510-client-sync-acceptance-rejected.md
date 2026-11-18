@@ -14,5 +14,12 @@ bump: minor
   guaranteed-chance config/slip/load values as the enabled case are used, so the only possible
   denial reason is this real protection check, requiring the server to report the specific
   `erosionclientsynctest outcome=PROTECTED` -- not any other denial outcome.
-- Reuses `ErosionClientSyncLiveProbe` exactly as-is (no new Java code): its existing `UNCHANGED`
-  report path, already built with this case in mind, is exactly the correct evidence here.
+- Extends `ErosionClientSyncLiveProbe` with an optional, explicit test-only acknowledge-file
+  signal (review finding 55137: a plain fixed-tick timer started at baseline capture does not
+  structurally prove continued observation happened AFTER the real denial was acknowledged). The
+  workflow writes that file only after independently confirming the real denial in the server's
+  own log; the already-connected client requires it before starting a further bounded
+  post-acknowledgment watch window, reporting the distinct `TIMEOUT_NO_ACK` status (never folded
+  into `UNCHANGED`) if it never appears within the overall bound. Also adds explicit,
+  checked arithmetic verifying the world-border inequalities actually hold, rather than relying
+  on a comment describing them.

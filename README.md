@@ -226,22 +226,26 @@ This is a bounded, multi-slice implementation. Current slice:
       conservation `ErosionAttemptGameTests` already proves in isolation, now proven live from an
       actual connected client's own perspective, using the exact same deterministic block
       arrangement and `GUARANTEED_CHANCE_CONFIG` values.
-- [x] Client-sync acceptance, rejected/canceled-unchanged case, with LIVE post-join evidence
-      (direction, comment 55058/55111/55114/55137): a third opt-in
-      `client-sync-acceptance-rejected.yml` workflow completes the pair -- a REAL, SPECIFIC
-      denial (never merely the absence of a mutation, and never `NO_CHANCE`/a dropped command/a
-      pre-attempt timeout/a disconnected client standing in for it). Uses a real vanilla
-      mechanism, not a mock: the world border, shrunk via `/worldborder` so its own real max
-      coordinate falls exactly between the source and destination positions, exercising
-      `ClaimProtection#mayMutate`'s own unconditional world-border check (no FakePlayer
-      involved, unlike spawn protection, which NeoForge's FakePlayer evidently bypasses) --
-      using the exact same
-      guaranteed-chance config as the enabled case, so the only possible denial reason is this
-      real protection check, requiring the server to report the specific `outcome=PROTECTED`.
-      The already-connected client, watching both endpoints since before the attempt, must
-      independently observe both genuinely unchanged for a bounded window after that real denial
-      is acknowledged -- reusing `ErosionClientSyncLiveProbe`'s existing `UNCHANGED` report path
-      exactly as built.
+- [ ] Client-sync acceptance, rejected/canceled-unchanged case, with LIVE post-join evidence --
+      implemented, not yet CI-verified at this revision (direction, comment
+      55058/55111/55114/55137): a third opt-in `client-sync-acceptance-rejected.yml` workflow
+      completes the pair -- a REAL, SPECIFIC denial (never merely the absence of a mutation, and
+      never `NO_CHANCE`/a dropped command/a pre-attempt timeout/a disconnected client standing in
+      for it). Uses a real vanilla mechanism, not a mock: the world border, shrunk via
+      `/worldborder` so its own real max coordinate falls exactly between the source and
+      destination positions (verified with real arithmetic in the workflow, not merely described
+      in a comment), exercising `ClaimProtection#mayMutate`'s own unconditional world-border check
+      (no FakePlayer involved, unlike spawn protection, which NeoForge's FakePlayer evidently
+      bypasses) -- using the exact same guaranteed-chance config as the enabled case, so the only
+      possible denial reason is this real protection check, requiring the server to report the
+      specific `outcome=PROTECTED`. `ErosionClientSyncLiveProbe` now supports an explicit
+      test-only acknowledge-file signal: the workflow writes it only after independently
+      confirming the real denial in the server's own log, and the already-connected client
+      requires that file before starting a further bounded post-acknowledgment watch window --
+      structurally ruling out a delayed harness letting the client's own timer expire before the
+      attempt even ran and still passing for the wrong reason (review finding 55137); a timeout
+      with the acknowledge file never seen reports the distinct `TIMEOUT_NO_ACK` status, never
+      folded into `UNCHANGED`.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
       above), multiplayer sync, and gameplay acceptance evidence.

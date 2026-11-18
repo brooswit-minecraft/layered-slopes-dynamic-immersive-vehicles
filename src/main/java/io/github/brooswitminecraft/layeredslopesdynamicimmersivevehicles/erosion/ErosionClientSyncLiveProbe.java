@@ -17,7 +17,7 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 
 /**
  * Test-only client-side probe for LIVE post-join synchronization evidence (direction
- * 55058/55111/55114): unlike {@link ErosionClientSyncProbe} (a single fixed-settle-then-read
+ * 55058/55111/55114/55137): unlike {@link ErosionClientSyncProbe} (a single fixed-settle-then-read
  * snapshot, taken before any mutation happens -- indistinguishable from ordinary initial chunk
  * sync), this watches two known positions, signals a CI harness once it has genuinely captured
  * a baseline from the real {@link ClientLevel} (so the harness knows it is now safe to trigger a
@@ -26,8 +26,21 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
  * live block-update packet received after connection, not something already present at join.
  *
  * <p>Reports whichever actually happened rather than assuming a change occurs: a timeout with no
- * change is reported as {@code UNCHANGED}, which is itself the correct evidence for a future
- * rejected/canceled-case acceptance slice reusing this same class.
+ * change is reported as {@code UNCHANGED}, which is itself the correct evidence for a
+ * rejected/canceled-case acceptance slice reusing this same class. Review finding (55137) on
+ * that exact reuse: a plain fixed-tick timer started at baseline does not structurally prove the
+ * observation continued AFTER the server actually acknowledged the real denial -- a delayed
+ * harness could in principle let the client's timer expire before the attempt even ran, and
+ * still report UNCHANGED for the wrong reason. {@link #ACKNOWLEDGE_FILE_PROPERTY} is optional:
+ * when a harness supplies it, the probe requires that file to appear (written by the harness
+ * only after it has independently confirmed the real denial in the server's own log) BEFORE
+ * declaring {@code UNCHANGED}, and then watches for a further bounded {@link
+ * #POST_ACKNOWLEDGE_WATCH_TICKS} after that signal specifically. If the full {@link
+ * #MAX_WATCH_TICKS} window elapses with the acknowledge file never appearing at all, that is
+ * reported as the distinct {@code TIMEOUT_NO_ACK} status -- never silently folded into
+ * {@code UNCHANGED} -- so a harness bug of exactly this kind fails loudly instead of passing for
+ * the wrong reason. When no acknowledge file is configured (the enabled/CHANGED-expected case
+ * never needs one), behavior is unchanged from before: a plain baseline-relative timeout.
  */
 public final class ErosionClientSyncLiveProbe {
     public static final String ENABLE_PROPERTY = "layeredslopesdynamicimmersivevehicles.clientSyncLiveProbe";
@@ -35,15 +48,21 @@ public final class ErosionClientSyncLiveProbe {
     public static final String DEST_POS_PROPERTY = "layeredslopesdynamicimmersivevehicles.clientSyncLiveProbe.destPos";
     public static final String READY_SIGNAL_FILE_PROPERTY =
             "layeredslopesdynamicimmersivevehicles.clientSyncLiveProbe.readySignalFile";
+    public static final String ACKNOWLEDGE_FILE_PROPERTY =
+            "layeredslopesdynamicimmersivevehicles.clientSyncLiveProbe.acknowledgeFile";
     public static final String OUTPUT_PROPERTY = "layeredslopesdynamicimmersivevehicles.clientSyncLiveProbe.outputFile";
-    /** Upper bound on ticks spent watching for a change before reporting UNCHANGED. */
+    /** Upper bound on ticks spent watching for either a change or the acknowledge file. */
     private static final int MAX_WATCH_TICKS = 600;
+    /** Ticks of continued observation required after the acknowledge file appears. */
+    private static final int POST_ACKNOWLEDGE_WATCH_TICKS = 100;
 
     private static boolean baselineCaptured = false;
     private static boolean done = false;
+    private static boolean acknowledged = false;
     private static String baselineSourceId;
     private static String baselineDestId;
     private static int watchTicks = 0;
+    private static int ticksSinceAcknowledge = 0;
 
     private ErosionClientSyncLiveProbe() {
     }
@@ -81,7 +100,40 @@ public final class ErosionClientSyncLiveProbe {
             writeResult("CHANGED", level, sourcePos, destPos);
             done = true;
             client.stop();
-        } else if (watchTicks >= MAX_WATCH_TICKS) {
+            return;
+        }
+
+        // build.gradle always sets this property to the empty string, never leaves it absent,
+        // when a harness does not configure one (e.g. the enabled/CHANGED-expected case) -- so
+        // both null and blank mean "no acknowledge signal configured" here.
+        String acknowledgePath = System.getProperty(ACKNOWLEDGE_FILE_PROPERTY);
+        if (acknowledgePath == null || acknowledgePath.isBlank()) {
+            // No acknowledge signal configured -- unchanged, original baseline-relative timeout.
+            if (watchTicks >= MAX_WATCH_TICKS) {
+                writeResult("UNCHANGED", level, sourcePos, destPos);
+                done = true;
+                client.stop();
+            }
+            return;
+        }
+
+        if (!acknowledged) {
+            if (Files.exists(Path.of(acknowledgePath))) {
+                acknowledged = true;
+                ticksSinceAcknowledge = 0;
+            } else if (watchTicks >= MAX_WATCH_TICKS) {
+                // The acknowledge file never appeared at all within the bound -- a pre-attempt
+                // timeout (or a harness that never actually ran the attempt), never reported as
+                // UNCHANGED, which could otherwise be mistaken for genuine denial evidence.
+                writeResult("TIMEOUT_NO_ACK", level, sourcePos, destPos);
+                done = true;
+                client.stop();
+            }
+            return;
+        }
+
+        ticksSinceAcknowledge++;
+        if (ticksSinceAcknowledge >= POST_ACKNOWLEDGE_WATCH_TICKS) {
             writeResult("UNCHANGED", level, sourcePos, destPos);
             done = true;
             client.stop();
