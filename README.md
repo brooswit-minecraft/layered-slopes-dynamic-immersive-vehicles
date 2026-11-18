@@ -257,9 +257,18 @@ This is a bounded, multi-slice implementation. Current slice:
       head `a68999c`: server log reports `outcome=PROTECTED`, and the already-connected client's
       own probe independently observed both endpoints genuinely unchanged
       (`minecraft:dirt`/`minecraft:air`).
+- [ ] Multiplayer client-sync acceptance (direction, comment 55159/55161): two new opt-in
+      workflows, `client-sync-acceptance-multiplayer-enabled.yml` and
+      `client-sync-acceptance-multiplayer-rejected.yml`, boot TWO genuinely distinct,
+      concurrently-connected client identities (different offline-mode usernames/UUIDs) against
+      the same server, both independently capturing their own baseline before a single forced
+      attempt and both independently observing the same real enabled 15+1 conservation or
+      rejected/canceled-unchanged outcome -- reusing the existing single-client harness and
+      `ErosionClientSyncLiveProbe` unmodified, via a new optional `--username` launch-argument
+      override. Implemented; not yet CI-verified.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), multiplayer sync, and gameplay acceptance evidence.
+      above), and gameplay acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 defaults to OFF via this mod's own real `erosionEnabled` server config (default `false`, see
