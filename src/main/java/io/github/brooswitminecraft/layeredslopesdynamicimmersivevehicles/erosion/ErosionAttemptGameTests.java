@@ -17,6 +17,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.fml.ModList;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
@@ -40,19 +41,34 @@ public final class ErosionAttemptGameTests {
     private ErosionAttemptGameTests() {
     }
 
-    private static final ErosionConfig GUARANTEED_CHANCE_CONFIG =
+    static final ErosionConfig GUARANTEED_CHANCE_CONFIG =
             new ErosionConfig(0.15, 1000.0, 10.0, 300.0, 3.0, 0.25, 4.0);
-    private static final double SLIP_ABOVE_THRESHOLD_MS = 5.0;
-    private static final double REFERENCE_LOAD_KG = 300.0;
+    static final double SLIP_ABOVE_THRESHOLD_MS = 5.0;
+    static final double REFERENCE_LOAD_KG = 300.0;
     private static final double TINY_CHANCE_SLIP_MS = 0.16; // just above DEFAULT's 0.15 threshold
 
     /**
      * EAST is the only candidate direction {@code canSmooth} can accept: the other three are
      * explicitly STONE (a different, blocking material -- {@code SmoothRules.Destination.BLOCKED})
      * so the shuffled direction order can never pick a different real destination regardless of
-     * seed.
+     * seed. Package-private: also reused by {@code DynamicTerrainPairedGameTests} (opt-in,
+     * dtPairedRuntime-only, see build.gradle).
      */
-    private static void placeSourceWithOneValidEastNeighbor(GameTestHelper helper, BlockPos pos) {
+    /**
+     * A handful of cases below call the real 5-arg {@code ErosionAttempt.attempt} overload
+     * (true production {@code Hooks.real}, not an injected fake) and assert an outcome that is
+     * only correct when Dynamic Terrain is genuinely absent -- true for every ordinary CI run,
+     * but not for the opt-in {@code -PdtPairedRuntime=true} build, which installs a real,
+     * pinned Dynamic Terrain specifically so {@code DynamicTerrainPairedGameTests} can exercise
+     * it. Those cases skip (rather than fail) when Dynamic Terrain is loaded, since they are not
+     * testing Dynamic Terrain interaction at all -- that coverage lives entirely in
+     * {@code DynamicTerrainPairedGameTests}, which only exists in that opt-in build.
+     */
+    private static boolean dynamicTerrainIsLoaded() {
+        return ModList.get().isLoaded("dynamicterrain");
+    }
+
+    static void placeSourceWithOneValidEastNeighbor(GameTestHelper helper, BlockPos pos) {
         helper.setBlock(pos, Blocks.DIRT.defaultBlockState());
         for (Direction direction : Direction.Plane.HORIZONTAL) {
             if (direction == Direction.EAST) {
@@ -83,6 +99,10 @@ public final class ErosionAttemptGameTests {
      */
     @GameTest(template = "flat_platform")
     public static void withNoClaimModOrDynamicTerrainInstalledARealMoveStillAppliesAndConservesMaterial(GameTestHelper helper) {
+        if (dynamicTerrainIsLoaded()) {
+            helper.succeed();
+            return;
+        }
         BlockPos pos = new BlockPos(1, 2, 1);
         BlockPos destPos = pos.relative(Direction.EAST);
         placeSourceWithOneValidEastNeighbor(helper, pos);
@@ -166,6 +186,10 @@ public final class ErosionAttemptGameTests {
 
     @GameTest(template = "flat_platform")
     public static void dedupPreventsASecondClaimInTheSameTick(GameTestHelper helper) {
+        if (dynamicTerrainIsLoaded()) {
+            helper.succeed();
+            return;
+        }
         BlockPos pos = new BlockPos(1, 2, 1);
         placeSourceWithOneValidEastNeighbor(helper, pos);
         ServerLevel level = (ServerLevel) helper.getLevel();
@@ -265,6 +289,10 @@ public final class ErosionAttemptGameTests {
      */
     @GameTest(template = "flat_platform")
     public static void anOffThreadCallIsDeniedBeforeTouchingAnythingAndDoesNotConsumeTheDedupSlot(GameTestHelper helper) {
+        if (dynamicTerrainIsLoaded()) {
+            helper.succeed();
+            return;
+        }
         BlockPos pos = new BlockPos(1, 2, 1);
         placeSourceWithOneValidEastNeighbor(helper, pos);
         BlockState before = helper.getBlockState(pos);
@@ -473,6 +501,10 @@ public final class ErosionAttemptGameTests {
      */
     @GameTest(template = "flat_platform")
     public static void dynamicTerrainCaveInRiskIsFalseWhenDynamicTerrainIsNotLoaded(GameTestHelper helper) {
+        if (dynamicTerrainIsLoaded()) {
+            helper.succeed();
+            return;
+        }
         BlockPos pos = new BlockPos(1, 2, 1);
         ServerLevel level = (ServerLevel) helper.getLevel();
         BlockPos absolutePos = helper.absolutePos(pos);
@@ -539,6 +571,10 @@ public final class ErosionAttemptGameTests {
      */
     @GameTest(template = "flat_platform")
     public static void aHarmlessSupportSubstitutionDoesNotPreventTheMoveFromApplying(GameTestHelper helper) {
+        if (dynamicTerrainIsLoaded()) {
+            helper.succeed();
+            return;
+        }
         BlockPos pos = new BlockPos(1, 2, 1);
         BlockPos destPos = pos.relative(Direction.EAST);
         BlockPos supportPos = destPos.below();

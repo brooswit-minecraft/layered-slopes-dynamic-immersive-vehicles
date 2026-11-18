@@ -15,7 +15,14 @@ bump: minor
   against DT's own source (review 54915): its cave-in handler does nothing when its own
   `caveInsEnabled` config (default `false`) is `false`. Now reads that real, live config value
   through NeoForge's public, generic `ModConfigs.getModConfigs(modId)` API (never DT's Java
-  classes), failing closed on any absence/read failure/unexpected type.
+  classes), failing closed on any absence/read failure/unexpected type. Review
+  54916/54917/54919/54920 found a generic key match alone insufficient: the permissive branch
+  now also requires DT's loaded version to fall inside a directly-verified range (checked against
+  every legacy-dynamic-terrain release from v0.28.2 through v5.0.1), and requires exactly one
+  matching registered config (ambiguity also fails closed). `DynamicTerrainCaveInRiskVersionTest`
+  unit-tests the version boundary directly; an opt-in `-PdtPairedRuntime=true` build
+  (`.github/workflows/dt-paired-runtime.yml`) boots the real production path against an actual
+  pinned Dynamic Terrain v5.0.1 twice, with its own real config set to `false` then `true`.
 - `ErosionAttempt` now enforces both checks as mandatory, unconditional steps before any
   `Smoothing.smooth()` call -- not behind an optional, separately-installed adapter -- plus a
   final re-verification immediately before applying: `canSmooth` AND an exact source/destination

@@ -79,10 +79,15 @@ def verify_runtime_log(log_text, expected=EXPECTED_REQUIRED_TEST_COUNT):
 
 
 def main(argv):
-    if len(argv) != 2:
-        raise SystemExit(f"usage: {argv[0]} <gametest.log>")
+    if len(argv) not in (2, 3):
+        raise SystemExit(f"usage: {argv[0]} <gametest.log> [expected_count]")
+    # expected_count is optional and defaults to this mod's own real GameTest count above --
+    # only the opt-in dtPairedRuntime workflow passes an explicit override, since that build adds
+    # one extra GameTest (DynamicTerrainPairedGameTests) that does not exist in the default
+    # build/test at all.
+    kwargs = {"expected": int(argv[2])} if len(argv) == 3 else {}
     try:
-        passed = verify_runtime_log(Path(argv[1]).read_text())
+        passed = verify_runtime_log(Path(argv[1]).read_text(), **kwargs)
     except (OSError, RuntimeEvidenceError) as error:
         raise SystemExit(f"GameTest count guard failed: {error}") from error
     print(f"GameTest count guard passed: {passed} required cases")

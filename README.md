@@ -80,6 +80,26 @@ This is a bounded, multi-slice implementation. Current slice:
         enabled/risky), per review 54915's "unknown/unreadable/version-mismatched config remains
         denied." If Dynamic Terrain is not loaded at all, there is no such risk to check.
 
+        Review 54916/54917/54919/54920 found that alone insufficient: a generically-matched key
+        proves nothing about whether a DIFFERENT, unverified Dynamic Terrain release still wires
+        that key to the same early-return guard. So the permissive branch (treating a read
+        `false` as genuinely safe) is reached only when Dynamic Terrain's own loaded version
+        falls inside a directly-verified range (checked tag-by-tag against every
+        brooswit-minecraft/legacy-dynamic-terrain release from v0.28.2 through its current
+        latest, v5.0.1 -- identical key/default/type/guard the whole way); any other installed
+        version fails closed, and the config read itself requires exactly one matching
+        registered config (ambiguity -- more than one -- also fails closed, rather than guessing
+        the first match). `DynamicTerrainCaveInRiskVersionTest` unit-tests the version boundary
+        directly (lower/upper bound, below, above -- no Dynamic Terrain or mod environment
+        needed, since it is a pure function over `org.apache.maven.artifact.versioning` types).
+        An opt-in `./gradlew runGameTestServer -PdtPairedRuntime=true` build (wired into CI via
+        `.github/workflows/dt-paired-runtime.yml`, never part of the default build/test) proves
+        the real production path against an actual pinned Dynamic Terrain v5.0.1, booting twice
+        with its own real config file on disk set to `false` then `true` and requiring the
+        correct `ErosionAttempt.Outcome` each time. That workflow does NOT prove a live config
+        reload mid-run without a server restart -- not attempted, and called out explicitly
+        rather than silently assumed.
+
         **Narrowed, not eliminated, limitation:** a world running Dynamic Terrain with
         `caveInsEnabled=true` (not the default) still gets no usable erosion -- building a finite
         supported policy for that configuration would require replicating DT's own recursive
@@ -155,4 +175,7 @@ Boots a real dedicated server with this mod, `layered-slopes`, and `layered-slop
 installed and runs the 18 GameTests (boot-only, plus `ErosionAttemptGameTests`' 17 real-world
 orchestration cases). Wired into CI via `scripts/check_gametest_count.py`, which fails closed if
 the expected test count regresses. An opt-in `div-paired-runtime.yml` workflow additionally
-builds DIV fresh and boots everything together at DIV's real NeoForge floor.
+builds DIV fresh and boots everything together at DIV's real NeoForge floor. A second opt-in
+`dt-paired-runtime.yml` workflow boots this mod with a real, pinned Dynamic Terrain installed
+(never a default dependency) to prove `DynamicTerrainCaveInRisk`'s real behavior end to end --
+see the Status section above.
