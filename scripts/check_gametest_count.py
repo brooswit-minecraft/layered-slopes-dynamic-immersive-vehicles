@@ -42,8 +42,13 @@ UNSET = "UNSET"
 EXPECTED_REQUIRED_TEST_COUNT = UNSET
 
 
-def verify_runtime_log(log_text):
-    if EXPECTED_REQUIRED_TEST_COUNT == UNSET:
+def verify_runtime_log(log_text, expected=EXPECTED_REQUIRED_TEST_COUNT):
+    """`expected` defaults to the module-level placeholder so real CI usage (main(), below)
+    always fails closed while it is UNSET. Tests exercising the actual log-parsing logic
+    (startup failure, mismatched counts, etc.) must pass an explicit positive `expected` --
+    otherwise every one of them would short-circuit on the UNSET check below and never reach
+    that logic at all, proving nothing about it."""
+    if expected == UNSET:
         raise RuntimeEvidenceError(
             "EXPECTED_REQUIRED_TEST_COUNT is still UNSET -- this mod has no GameTests yet; "
             "set it to the real count once the first one is added, don't borrow one")
@@ -58,9 +63,9 @@ def verify_runtime_log(log_text):
     if completed[0].end() > passed[0].start() or completed[0].group(1) != passed[0].group(1):
         raise RuntimeEvidenceError("completion/pass summaries are not one consistent terminal pair")
     count = int(completed[0].group(1))
-    if count != EXPECTED_REQUIRED_TEST_COUNT:
+    if count != expected:
         raise RuntimeEvidenceError(
-            f"expected exactly {EXPECTED_REQUIRED_TEST_COUNT} required GameTests to complete and pass, got {count}")
+            f"expected exactly {expected} required GameTests to complete and pass, got {count}")
     return count
 
 
