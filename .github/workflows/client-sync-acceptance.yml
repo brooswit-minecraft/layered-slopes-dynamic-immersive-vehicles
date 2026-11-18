@@ -41,7 +41,7 @@ permissions:
 jobs:
   default-off-client-sync-acceptance:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,7 +78,7 @@ jobs:
           cd server-side
           mkfifo stdin.pipe
           exec 9<>stdin.pipe
-          timeout 600 ./gradlew runServer --no-daemon -PerosionClientSyncTest=true \
+          timeout 900 ./gradlew runServer --no-daemon -PerosionClientSyncTest=true \
             < stdin.pipe > server-boot.log 2>&1 &
           server_pid=$!
           cd ..
@@ -95,7 +95,7 @@ jobs:
 
           cd client-side
           xvfb-run -a --server-args="-screen 0 1280x720x24" \
-            timeout 420 ./gradlew runClient --no-daemon \
+            timeout 600 ./gradlew runClient --no-daemon \
               -PerosionClientSyncProbe=true \
               -PerosionClientSyncQuickPlay=localhost:25577 \
               -PerosionClientSyncProbePos=0,-59,0 \
@@ -104,12 +104,24 @@ jobs:
           client_pid=$!
           cd ..
 
-          for i in $(seq 1 90); do
+          # Two prior CI runs both stopped logging client-side at the exact same point (texture
+          # atlas/animation loading) with zero further activity within a ~3 minute window and
+          # zero server-side connection evidence. This longer, instrumented wait distinguishes
+          # "slow, still progressing" from "genuinely stuck forever" before guessing another fix
+          # blind -- it prints the client log's line count every 30s so real progress (or its
+          # total absence) is visible in the CI output itself.
+          last_client_lines=0
+          for i in $(seq 1 150); do
             grep -qE 'joined the game' server-side/server-boot.log 2>/dev/null && break
+            if [ $((i % 15)) -eq 0 ]; then
+              current_lines=$(wc -l < client-side/client-boot.log)
+              echo "diagnostic: $((i * 2))s elapsed, client-boot.log has $current_lines lines (was $last_client_lines 30s ago)"
+              last_client_lines=$current_lines
+            fi
             sleep 2
           done
           if ! grep -qE 'joined the game' server-side/server-boot.log; then
-            echo "::error::no player ever joined the server -- the headless client did not connect. client-boot.log:"
+            echo "::error::no player ever joined the server after 300s -- the headless client did not connect. Full client-boot.log:"
             cat client-side/client-boot.log || true
             exit 1
           fi
