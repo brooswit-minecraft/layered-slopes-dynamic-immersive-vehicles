@@ -319,12 +319,31 @@ neoForge {
         client {
             client()
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            // Test-only client-sync probe (direction 55058/55063): never active unless a CI
+            // harness explicitly opts in via these Gradle properties. Absent/false by default,
+            // so an ordinary ./gradlew runClient is completely unaffected.
+            systemProperty 'layeredslopesdynamicimmersivevehicles.clientSyncProbe',
+                    (findProperty('erosionClientSyncProbe') ?: 'false') as String
+            systemProperty 'layeredslopesdynamicimmersivevehicles.clientSyncProbe.pos',
+                    (findProperty('erosionClientSyncProbePos') ?: '') as String
+            systemProperty 'layeredslopesdynamicimmersivevehicles.clientSyncProbe.outputFile',
+                    (findProperty('erosionClientSyncProbeOutputFile') ?: '') as String
+            // Auto-join a local dedicated server headlessly (direction 55058/55063): only when
+            // the harness opts in -- an ordinary ./gradlew runClient never gets these arguments.
+            if ((findProperty('erosionClientSyncProbe') ?: 'false') == 'true') {
+                programArgument '--quickPlayMultiplayer'
+                programArgument (findProperty('erosionClientSyncQuickPlay') ?: 'localhost:25577') as String
+            }
         }
 
         server {
             server()
             programArgument '--nogui'
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            // Test-only forced-erosion-attempt command (direction 55058/55063): never registered
+            // unless a CI harness explicitly opts in via this Gradle property.
+            systemProperty 'layeredslopesdynamicimmersivevehicles.clientSyncTest',
+                    (findProperty('erosionClientSyncTest') ?: 'false') as String
         }
 
         gameTestServer {

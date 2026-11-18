@@ -1,0 +1,174 @@
+name: Client-sync acceptance, default-OFF case (opt-in)
+
+# Opt-in, CI-only, isolated runner (never Servy, never a shared/native-test-slot resource).
+# Direction (comment 55058/55063): prove real client-observed synchronization, not server-only
+# GameTest results or an UPDATE flag relabeled as client-sync evidence. NeoForge's GameTest
+# framework runs entirely in-process against a ServerLevel and never sends a real client-bound
+# packet, so this is the first slice that actually drives a REAL second process: a real headless
+# NeoForge dev client (feasibility proven by client-sync-harness-feasibility.yml) auto-joining a
+# real dedicated server over a real loopback socket via vanilla's --quickPlayMultiplayer, with a
+# test-only client-side tick hook (ErosionClientSyncProbe, never active unless explicitly
+# enabled) reading the actual ClientLevel -- built purely from received network packets,
+# independent of whatever the server believes -- at a known position.
+#
+# This slice covers only the default-OFF case: erosionEnabled defaults false, so a forced
+# ErosionAttempt.attempt call (via the test-only erosionclientsynctest command, never active
+# unless explicitly enabled, and never a substitute for DIV's real contact-telemetry trigger
+# still blocked on MINECRAFT-545) must produce Outcome.DISABLED and leave the world untouched --
+# proven by what the REAL CLIENT actually reads back, not a server-side flag. The enabled/
+# one-layer-conservation and rejected/canceled-unchanged cases are separate, later slices.
+#
+# Two separate checkouts (server-side/, client-side/) because this repo's dev runs all default
+# to a single shared ./run working directory -- running client and server from the same checkout
+# in the same job would collide on that one directory. Boot, interact, and shutdown all happen
+# within ONE script step (this repo's established pattern in pinned-jar-smoke-acceptance.yml and
+# div-replacement-stack-smoke.yml) because a background process started with `&` in one GitHub
+# Actions step is not reliably available to a later, separate step.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/client-sync-acceptance.yml'
+      - 'build.gradle'
+      - 'gradle.properties'
+      - 'settings.gradle'
+      - 'gradle/wrapper/**'
+      - 'src/**'
+
+permissions:
+  contents: read
+
+jobs:
+  default-off-client-sync-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: server-side
+      - uses: actions/checkout@v4
+        with:
+          path: client-side
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Install Xvfb and a software GL renderer (Mesa llvmpipe) for the headless client
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y xvfb mesa-utils libgl1-mesa-dri
+
+      - name: Pre-seed the server's offline-mode server.properties before first boot
+        run: |
+          mkdir -p server-side/run client-side/run
+          echo "eula=true" > server-side/run/eula.txt
+          cat > server-side/run/server.properties <<'EOF'
+          online-mode=false
+          server-port=25577
+          level-seed=510
+          spawn-protection=0
+          EOF
+
+      - name: Boot a real server and a real headless client together, drive the forced default-OFF erosion attempt, verify what the client actually observed, then stop both gracefully
+        run: |
+          set -o pipefail
+          cd server-side
+          mkfifo stdin.pipe
+          exec 9<>stdin.pipe
+          timeout 600 ./gradlew runServer --no-daemon -PerosionClientSyncTest=true \
+            < stdin.pipe > server-boot.log 2>&1 &
+          server_pid=$!
+          cd ..
+
+          for i in $(seq 1 120); do
+            grep -q 'Done (' server-side/server-boot.log 2>/dev/null && break
+            sleep 2
+          done
+          if ! grep -q 'Done (' server-side/server-boot.log; then
+            echo "::error::server never reported 'Done (' -- see server-boot.log"
+            cat server-side/server-boot.log
+            exit 1
+          fi
+
+          cd client-side
+          xvfb-run -a --server-args="-screen 0 1280x720x24" \
+            timeout 420 ./gradlew runClient --no-daemon \
+              -PerosionClientSyncProbe=true \
+              -PerosionClientSyncQuickPlay=localhost:25577 \
+              -PerosionClientSyncProbePos=0,-59,0 \
+              -PerosionClientSyncProbeOutputFile="$(pwd)/client-probe-result.txt" \
+            > client-boot.log 2>&1 &
+          client_pid=$!
+          cd ..
+
+          for i in $(seq 1 90); do
+            grep -qE 'joined the game' server-side/server-boot.log 2>/dev/null && break
+            sleep 2
+          done
+          if ! grep -qE 'joined the game' server-side/server-boot.log; then
+            echo "::error::no player ever joined the server -- the headless client did not connect. client-boot.log:"
+            cat client-side/client-boot.log || true
+            exit 1
+          fi
+
+          # Move the just-joined player to a fixed, known absolute position so the harness never
+          # has to guess or parse vanilla's natural spawn-finding logic, then place a known block
+          # and force the default-OFF erosion attempt.
+          printf 'tp @a 0 -60.5 0\n' > server-side/stdin.pipe
+          sleep 2
+          printf 'setblock 0 -59 0 minecraft:dirt\n' > server-side/stdin.pipe
+          sleep 1
+          printf 'erosionclientsynctest 0 -59 0 0 0\n' > server-side/stdin.pipe
+          sleep 1
+          tail -40 server-side/server-boot.log
+
+          found=false
+          for i in $(seq 1 60); do
+            if [ -s client-side/client-probe-result.txt ]; then
+              found=true
+              break
+            fi
+            sleep 2
+          done
+
+          echo "stop" > server-side/stdin.pipe
+          graceful=false
+          for i in $(seq 1 30); do
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              graceful=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$graceful" != "true" ]; then
+            kill -9 "$server_pid" 2>/dev/null || true
+          fi
+          kill -9 "$client_pid" 2>/dev/null || true
+          exec 9>&-
+          rm -f server-side/stdin.pipe
+
+          if [ "$found" != "true" ]; then
+            echo "::error::the client never wrote a probe result -- it either never saw the target chunk or the probe did not run. client-boot.log:"
+            cat client-side/client-boot.log || true
+            exit 1
+          fi
+          observed="$(cat client-side/client-probe-result.txt)"
+          echo "client observed block: $observed"
+          if [ "$observed" != "minecraft:dirt" ]; then
+            echo "::error::expected the real client to observe 'minecraft:dirt' unchanged (erosionEnabled defaults false), but observed '$observed'"
+            exit 1
+          fi
+          echo "confirmed: a real, independently-connected client observed the block at (0,-59,0) is still minecraft:dirt after a forced erosion attempt with erosionEnabled defaulting to false -- genuine client-synchronization evidence of default-OFF no-mutation"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: client-sync-acceptance-default-off-evidence
+          path: |
+            server-side/server-boot.log
+            client-side/client-boot.log
+            client-side/client-probe-result.txt
+          if-no-files-found: warn
