@@ -179,6 +179,12 @@ jobs:
             grep -qF 'Loaded 0 entity animations' client-side-a/client-boot.log 2>/dev/null && break
             sleep 2
           done
+          if ! grep -qF 'Loaded 0 entity animations' client-side-a/client-boot.log; then
+            echo "::error::client A never reached 'Loaded 0 entity animations' -- the staggered launch cannot be enforced; starting client B now would not actually be serialized after client A. client-side-a/client-boot.log tail:"
+            tail -20 client-side-a/client-boot.log || true
+            kill -9 "$server_pid" "$client_a_pid" "$xvfb_a_pid" "$xvfb_b_pid" 2>/dev/null || true
+            exit 1
+          fi
 
           cd client-side-b
           DISPLAY=:98 timeout 600 ./gradlew runClient --no-daemon \

@@ -49,3 +49,7 @@ bump: minor
   A's has already finished (both keep the SAME shared, pre-warmed cache, so there is nothing left
   to race over, and no cold-cache cost for either side) -- "concurrently connected" only needs to
   hold during the observation window around the forced attempt, not at JVM start.
+- Review finding on that fix: the wait loop for client A's marker fell through silently (client B
+  would start anyway) if the marker never appeared within the bound, so the claimed serialization
+  was not actually enforced under a timeout. Added an explicit assertion after the loop that
+  fails with client A's own diagnostic log rather than falling through.
