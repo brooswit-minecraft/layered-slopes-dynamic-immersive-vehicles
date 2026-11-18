@@ -1,0 +1,126 @@
+name: Dependency-failure acceptance (opt-in)
+
+# Opt-in: never runs on an ordinary push, and only runs on a pull_request when THIS workflow
+# file itself changed (same shape as div-paired-runtime.yml/dt-paired-runtime.yml). Proves
+# NeoForge's own mandatory-dependency check actually refuses to boot, with a meaningful message
+# naming the specific missing mod, when a required dependency's jar is absent at runtime -- not
+# merely that some process exits nonzero (direction, comment 54973). See build.gradle's
+# omitRequiredDependency flag: compileOnly stays so main code still compiles; only the
+# runtimeOnly entry for the named mod is skipped, so neoforge.mods.toml's own
+# type="required" declaration for it is genuinely unmet.
+#
+# IMPORTANT, learned from this workflow's own first real run: Gradle's runGameTestServer task
+# reports BUILD SUCCESSFUL (exit 0) even when the launched dedicated-server JVM itself logged
+# "Failed to start the minecraft server" and a net.neoforged.fml.ModLoadingException -- the
+# exact same silent-failure trap scripts/check_gametest_count.py already exists to catch for the
+# success path. So this never branches on `./gradlew`'s own exit code; it always captures the
+# log and asserts on its CONTENT: the specific ModLoadingException naming the missing modid, and
+# the ABSENCE of a "GAME TESTS COMPLETE" line (proving it never got far enough to run any test).
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/dependency-failure-acceptance.yml'
+      - 'build.gradle'
+      - 'gradle.properties'
+      - 'src/main/templates/META-INF/neoforge.mods.toml'
+
+permissions:
+  contents: read
+
+jobs:
+  missing-layeredslopes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Boot with layeredslopes deliberately missing at runtime
+        run: |
+          set -o pipefail
+          ./gradlew runGameTestServer --no-daemon -PomitRequiredDependency=layeredslopes \
+            2>&1 | tee missing-layeredslopes.log || true
+
+      - name: Verify a real ModLoadingException attributes THIS mod's own requirement on layeredslopes, and no tests ran
+        run: |
+          if ! grep -q 'net.neoforged.fml.ModLoadingException' missing-layeredslopes.log; then
+            echo "::error::expected a net.neoforged.fml.ModLoadingException -- the server either booted successfully or failed for an unrelated reason"
+            exit 1
+          fi
+          # layeredslopegrading ALSO requires layeredslopes, so a real boot without it names
+          # BOTH mods ("Mod layeredslopegrading requires layeredslopes..." AND "Mod
+          # layeredslopesdynamicimmersivevehicles requires layeredslopes...") -- review 54978's
+          # exact point. A generic "requires layeredslopes" match would pass on layeredslopegrading's
+          # own unrelated requirement alone, which proves nothing about THIS mod's own
+          # neoforge.mods.toml declaration. Require the line naming THIS mod specifically.
+          if ! grep -q 'Mod layeredslopesdynamicimmersivevehicles requires layeredslopes .* or above' missing-layeredslopes.log; then
+            echo "::error::the ModLoadingException is present, but no line attributes THIS mod's own requirement on layeredslopes -- only some other mod's requirement (e.g. layeredslopegrading's) would not prove THIS mod's declaration actually works"
+            exit 1
+          fi
+          if ! grep -q 'Currently, layeredslopes is not installed' missing-layeredslopes.log; then
+            echo "::error::expected the exact 'Currently, layeredslopes is not installed' line"
+            exit 1
+          fi
+          if grep -q 'GAME TESTS COMPLETE' missing-layeredslopes.log; then
+            echo "::error::found a GAME TESTS COMPLETE line -- the server ran tests despite the missing mandatory dependency, this is not the failure this check expects"
+            exit 1
+          fi
+          echo "confirmed: a real ModLoadingException attributes THIS mod's own requirement on layeredslopes, and no GameTest ever ran"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: missing-layeredslopes-evidence
+          path: missing-layeredslopes.log
+          if-no-files-found: warn
+
+  missing-layeredslopegrading:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Boot with layeredslopegrading deliberately missing at runtime
+        run: |
+          set -o pipefail
+          ./gradlew runGameTestServer --no-daemon -PomitRequiredDependency=layeredslopegrading \
+            2>&1 | tee missing-layeredslopegrading.log || true
+
+      - name: Verify a real ModLoadingException attributes THIS mod's own requirement on layeredslopegrading, and no tests ran
+        run: |
+          if ! grep -q 'net.neoforged.fml.ModLoadingException' missing-layeredslopegrading.log; then
+            echo "::error::expected a net.neoforged.fml.ModLoadingException -- the server either booted successfully or failed for an unrelated reason"
+            exit 1
+          fi
+          # Require the line naming THIS mod specifically, not just any mod's requirement on
+          # layeredslopegrading (same precision as the layeredslopes job above -- review 54978).
+          if ! grep -q 'Mod layeredslopesdynamicimmersivevehicles requires layeredslopegrading .* or above' missing-layeredslopegrading.log; then
+            echo "::error::the ModLoadingException is present, but no line attributes THIS mod's own requirement on layeredslopegrading"
+            exit 1
+          fi
+          if ! grep -q 'Currently, layeredslopegrading is not installed' missing-layeredslopegrading.log; then
+            echo "::error::expected the exact 'Currently, layeredslopegrading is not installed' line"
+            exit 1
+          fi
+          if grep -q 'GAME TESTS COMPLETE' missing-layeredslopegrading.log; then
+            echo "::error::found a GAME TESTS COMPLETE line -- the server ran tests despite the missing mandatory dependency, this is not the failure this check expects"
+            exit 1
+          fi
+          echo "confirmed: a real ModLoadingException attributes THIS mod's own requirement on layeredslopegrading, and no GameTest ever ran"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: missing-layeredslopegrading-evidence
+          path: missing-layeredslopegrading.log
+          if-no-files-found: warn

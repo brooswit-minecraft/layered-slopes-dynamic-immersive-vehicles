@@ -119,6 +119,16 @@ tasks.register("downloadLayeredSlopeGrading") {
     }
 }
 
+// Opt-in dependency-failure acceptance (direction, comment 54973): proves NeoForge's own
+// mandatory-dependency check actually refuses to boot, with a meaningful message naming the
+// missing mod, when a required dependency's jar is absent at runtime -- not merely that SOME
+// process exits nonzero. `-PomitRequiredDependency=<modid>` (layeredslopes or
+// layeredslopegrading) skips ONLY that jar's runtimeOnly entry below; compileOnly stays so main
+// code still compiles. neoforge.mods.toml's own `type="required"` declaration for that modId is
+// untouched, so NeoForge's loader genuinely cannot find the mod it was told to require. Never
+// set for an ordinary build.
+def omitRequiredDependency = findProperty("omitRequiredDependency")
+
 // Opt-in paired-runtime check (MINECRAFT-510, direction 54843): DIV has no stable release to
 // pin, so there is no download-and-verify task here -- `-PdivLocalJar=<path>` (a jar built
 // fresh from DIV's own pinned commit, e.g. by the div-paired-runtime.yml workflow) is the ONLY
@@ -265,9 +275,13 @@ neoForge {
 
 dependencies {
     compileOnly files(layeredSlopesJar).builtBy(tasks.named("downloadLayeredSlopes"))
-    runtimeOnly files(layeredSlopesJar).builtBy(tasks.named("downloadLayeredSlopes"))
+    if (omitRequiredDependency != "layeredslopes") {
+        runtimeOnly files(layeredSlopesJar).builtBy(tasks.named("downloadLayeredSlopes"))
+    }
     compileOnly files(layeredSlopeGradingJar).builtBy(tasks.named("downloadLayeredSlopeGrading"))
-    runtimeOnly files(layeredSlopeGradingJar).builtBy(tasks.named("downloadLayeredSlopeGrading"))
+    if (omitRequiredDependency != "layeredslopegrading") {
+        runtimeOnly files(layeredSlopeGradingJar).builtBy(tasks.named("downloadLayeredSlopeGrading"))
+    }
 
     if (divJar != null) {
         compileOnly files(divJar)

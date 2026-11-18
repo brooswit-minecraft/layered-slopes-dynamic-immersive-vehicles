@@ -182,10 +182,29 @@ This is a bounded, multi-slice implementation. Current slice:
       actually happen, the same way the Dynamic Terrain probe above confirmed NeoForge's own
       config-reload behavior), with the production path transitioning `DISABLED` -> `APPLIED`
       accordingly.
+- [x] Dependency-failure acceptance, missing-dependency case only (direction, comment 54973):
+      an opt-in `dependency-failure-acceptance.yml` workflow proves NeoForge's own
+      mandatory-dependency check actually refuses to boot, with a message attributing THIS
+      mod's own `neoforge.mods.toml` requirement (not merely some other mod's unrelated
+      requirement on the same dependency -- `layered-slope-grading` itself also requires
+      `layered-slopes`, so a generic match on either name alone would not prove this), when
+      `layered-slopes` or `layered-slope-grading` is absent at runtime -- not merely that some
+      process exits nonzero (an earlier version of this check branched on Gradle's own process
+      exit code, which stays 0/`BUILD SUCCESSFUL` even when the dedicated server itself fails
+      to boot -- fixed to assert on the real log content instead). `build.gradle`'s
+      `-PomitRequiredDependency=<modid>` flag skips only that jar's `runtimeOnly` entry
+      (`compileOnly` stays, so main code still compiles); `neoforge.mods.toml`'s own
+      `type="required"` declaration for that modId is untouched, so the dependency is
+      genuinely, verifiably unmet, never simulated.
+
+      **Not yet covered, named explicitly rather than implied by the checkmark above** (review
+      54978): an incompatible-but-present *version* of either dependency (as opposed to fully
+      absent), the eventual DIV dependency's own missing/incompatible case once it exists, and
+      base-mod isolation (this mod alone, with neither compat target installed).
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), multiplayer sync, dependency-failure tests, pinned-jar smoke acceptance, and
-      gameplay acceptance evidence.
+      above), multiplayer sync, incompatible-version/base-mod-isolation dependency acceptance,
+      pinned-jar smoke acceptance, and gameplay acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 defaults to OFF via this mod's own real `erosionEnabled` server config (default `false`, see
