@@ -88,16 +88,20 @@ public final class ErosionClientSyncLiveProbe {
         }
         Minecraft client = Minecraft.getInstance();
         ClientLevel level = client.level;
+        // Review finding: a gap in tracking (level unloaded, or either target chunk unloaded/
+        // reloaded) must restart the settle count -- otherwise this does not actually enforce
+        // CONSECUTIVE tracked ticks, only a cumulative total, which could let a baseline be
+        // captured right after a fresh (potentially still-transient) reload. Both early-return
+        // paths below count as "tracking unavailable", so both reset the counter identically.
         if (level == null) {
+            if (!baselineCaptured) {
+                settleTicks = 0;
+            }
             return;
         }
         BlockPos sourcePos = parsePos(System.getProperty(SOURCE_POS_PROPERTY));
         BlockPos destPos = parsePos(System.getProperty(DEST_POS_PROPERTY));
         if (sourcePos == null || destPos == null || !level.hasChunkAt(sourcePos) || !level.hasChunkAt(destPos)) {
-            // Review finding: a gap in tracking (chunk unloaded/reloaded) must restart the
-            // settle count -- otherwise this does not actually enforce CONSECUTIVE tracked
-            // ticks, only a cumulative total, which could let a baseline be captured right after
-            // a fresh (potentially still-transient) reload.
             if (!baselineCaptured) {
                 settleTicks = 0;
             }
