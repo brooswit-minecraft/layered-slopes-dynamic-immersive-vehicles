@@ -278,7 +278,9 @@ This is a bounded, multi-slice implementation. Current slice:
       racing over the shared cache -- fixed by staggering the client launches (client B does not
       start until client A's one-time resolution has finished, asserted rather than silently
       falling through on a timeout) rather than isolating caches (which just traded the race for
-      a cold-cache timeout). CI-verified at head `857594f`: both clients independently report
+      a cold-cache timeout; a second kickback caught the settle-reset fix itself was incomplete,
+      missing the separate level==null early-return path -- now both paths reset identically).
+      CI-verified at head `092b3f3`: both clients independently report
       `CHANGED`/`dynamicterrain:layered_dirt` 15+1, and both independently report `UNCHANGED`/
       `minecraft:dirt`/`minecraft:air`, with the server's own `/list` confirming both identities
       concurrently connected immediately before each forced attempt.
