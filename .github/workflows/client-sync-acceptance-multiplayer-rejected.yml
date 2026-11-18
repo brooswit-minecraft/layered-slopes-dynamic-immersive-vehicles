@@ -190,11 +190,11 @@ jobs:
             sleep 1
             DISPLAY=:99 xdotool mouseup 1 2>>client-side-a/xdotool.log || true
             DISPLAY=:98 xdotool mouseup 1 2>>client-side-b/xdotool.log || true
-            joined_count=$(grep -cE 'joined the game' server-side/server-boot.log 2>/dev/null); joined_count=${joined_count:-0}
+            joined_count=$(grep -cE 'joined the game' server-side/server-boot.log 2>/dev/null || true); joined_count=${joined_count:-0}
             [ "$joined_count" -ge 2 ] && break
             sleep 7
           done
-          joined_count=$(grep -cE 'joined the game' server-side/server-boot.log 2>/dev/null); joined_count=${joined_count:-0}
+          joined_count=$(grep -cE 'joined the game' server-side/server-boot.log 2>/dev/null || true); joined_count=${joined_count:-0}
           if [ "$joined_count" -lt 2 ]; then
             echo "::error::expected two distinct players to join, only saw $joined_count -- see server-boot.log tail and both client-boot.logs:"
             tail -20 server-side/server-boot.log
@@ -236,8 +236,12 @@ jobs:
           # whole log only show each connected at SOME point, not that both were present
           # together at this instant) via the server's own real /list response.
           printf 'list\n' > server-side/stdin.pipe
-          sleep 2
-          list_line=$(grep 'There are' server-side/server-boot.log | tail -1)
+          list_line=""
+          for i in $(seq 1 10); do
+            list_line=$(grep 'There are' server-side/server-boot.log 2>/dev/null | tail -1 || true)
+            [ -n "$list_line" ] && break
+            sleep 1
+          done
           echo "pre-attempt /list: $list_line"
           list_names=$(echo "$list_line" | sed -E 's/.*online: ?//' | tr -d ' ')
           if ! printf ',%s,' "$list_names" | grep -qF ',Dev,'; then
