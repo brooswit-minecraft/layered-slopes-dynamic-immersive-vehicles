@@ -76,12 +76,23 @@ This is a bounded, multi-slice implementation. Current slice:
       environment-dependent on the real GitHub Actions runner. The seam's own sensitivity was
       verified by temporarily reordering the production check, confirming the test fails, then
       reverting) prove it against a real world, not primitives in isolation.
+- [x] `SmoothingScopeProtectionAdapter`: a real, not stand-in, `ProtectionAdapter`. It is correct
+      specifically because `Smoothing.smooth()` -- verified directly against its implementation
+      -- mutates exactly `source` and `source.relative(direction)`, nothing else; there is no
+      wider neighbor/cave-in scope for an erosion consumer built on that primitive to protect
+      against, which is a provable fact, not an unimplemented placeholder. `authorize()` denies
+      any request whose destination is not exactly one cardinal step from its source (scope-creep
+      defense) and defers the actual source/destination decision to `Smoothing.smooth()`'s own
+      already-wired `SmoothingAuthorizationEvent`, since this adapter cannot verify whether a
+      real third-party claim mod is listening and claiming so would be unverifiable. Building this
+      class does not by itself enable erosion: `ErosionAttempt`'s production overloads still pass
+      `propagationScopeKnown=false` and nothing installs this adapter on the gate yet -- wiring it
+      in as the default, and an on/off config switch, are deliberate, separate next decisions.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), a concrete propagation/claim-aware `ProtectionAdapter` (its real scope is defined by
-      whatever neighbor-support consequence the DIV-side wiring actually produces -- not designed
-      in the abstract ahead of that), multiplayer sync, dependency-failure tests, pinned-jar smoke
-      acceptance, and gameplay acceptance evidence.
+      above), wiring `SmoothingScopeProtectionAdapter` in as the gate's default and an explicit
+      default-OFF config switch before any real erosion can apply, multiplayer sync,
+      dependency-failure tests, pinned-jar smoke acceptance, and gameplay acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 will default to OFF; operators running this mod alongside Dynamic Terrain's deprecated vehicle
