@@ -62,65 +62,18 @@ This is a bounded, multi-slice implementation. Current slice:
         ones that listen on `BreakEvent`), not a guarantee against every possible hook; a preflight
         check only, and explicitly not a claim of placement-hook-equivalent semantics at the
         destination.
-      - `DynamicTerrainCaveInRisk`: Dynamic Terrain's cave-ins are the one concretely-named
-        external propagation risk reviews identified. Two earlier, narrower designs were each
-        found to overclaim: a face-adjacent-neighbor tag scan (review 54907/54908 -- rested on
-        today's shipped tag contents and call ordering, and treated an unloaded neighbor as
-        proven-safe rather than unknown), then an unconditional "deny whenever Dynamic Terrain is
-        loaded at all" rule (review 54910 -- more conservative than necessary, since "DT is
-        loaded" and "DT's cave-ins are actually active" are different, independently-verifiable
-        facts). Verified directly against DT's own source (review 54915): its cave-in handler
-        returns immediately, doing nothing, whenever its own `caveInsEnabled` config value
-        (`ModConfig.Type.SERVER`, default `false`) is `false`. This now reads that real, live
-        config value through NeoForge's own public, generic, supported API
-        (`ModConfigs.getModConfigs(modId)` plus the standard `night-config` reader) -- never DT's
-        Java classes, never DT's own `ModConfigSpec.BooleanValue` field, the same
-        data/API-only optional-dependency shape `GroundSurfaces.java` already uses for Layered
-        Slopes. Any absence, read failure, or unexpected value type fails closed (treated as
-        enabled/risky), per review 54915's "unknown/unreadable/version-mismatched config remains
-        denied." If Dynamic Terrain is not loaded at all, there is no such risk to check.
-
-        Review 54916/54917/54919/54920 found that alone insufficient: a generically-matched key
-        proves nothing about whether a DIFFERENT, unverified Dynamic Terrain release still wires
-        that key to the same early-return guard. So the permissive branch (treating a read
-        `false` as genuinely safe) is reached only when Dynamic Terrain's own loaded version
-        falls inside a directly-verified range (checked tag-by-tag against every
-        brooswit-minecraft/legacy-dynamic-terrain release from v0.28.2 through its current
-        latest, v5.0.1 -- identical key/default/type/guard the whole way); any other installed
-        version fails closed, and the config read itself requires exactly one matching
-        registered config (ambiguity -- more than one -- also fails closed, rather than guessing
-        the first match). `DynamicTerrainCaveInRiskVersionTest` unit-tests the version boundary
-        directly (lower/upper bound, below, above -- no Dynamic Terrain or mod environment
-        needed, since it is a pure function over `org.apache.maven.artifact.versioning` types).
-        An opt-in `./gradlew runGameTestServer -PdtPairedRuntime=true` build (wired into CI via
-        `.github/workflows/dt-paired-runtime.yml`, never part of the default build/test) proves
-        the real production path against an actual pinned Dynamic Terrain v5.0.1, booting twice
-        with its own real config file on disk set to `false` then `true` and requiring the
-        correct `ErosionAttempt.Outcome` each time. Review 54925 correctly found that alone still
-        insufficient: neither the test nor the workflow had ever observed Dynamic Terrain's own
-        loaded `DynamicTerrainConfig.CAVE_INS_ENABLED` value directly, so a divergence between
-        this mod's generic reader and Dynamic Terrain's real value could pass unnoticed.
-        `DynamicTerrainPairedGameTests` (compiled only in this opt-in profile, the one place
-        referencing Dynamic Terrain's own Java classes directly is deliberate and safe) now reads
-        that `BooleanValue` directly and cross-checks it against the generic reader before
-        checking the production outcome. It also edits Dynamic Terrain's own config file on disk
-        WHILE the false-boot server keeps running (no restart) and polls for the live value to
-        flip -- an evidence-gathering probe, not an assumption either way: confirmed, on a real
-        pinned Dynamic Terrain v5.0.1, that NeoForge's own config file watcher DOES pick up the
-        change and flip the value within a couple of seconds, and that the production path
-        transitions from `APPLIED` to `NEIGHBOR_CAVE_IN_RISK` accordingly, with this mod's generic
-        reader agreeing throughout. Had no reload been observed, the test would fail loudly
-        rather than silently pass, per review 54923's "fail closed for runtime changes" --
-        reload is confirmed to work, not merely hoped to.
-
-        **Narrowed, not eliminated, limitation:** a world running Dynamic Terrain with
-        `caveInsEnabled=true` (not the default) still gets no usable erosion -- building a finite
-        supported policy for that configuration would require replicating DT's own recursive
-        `SupportSearch`-based connectivity check (`CaveIns.java`/`SupportSearch.java`, bounded to
-        256 visited cells and re-checking the changed position plus all six face-adjacent
-        neighbors) to prove a specific move cannot destabilize a reachable DT-tagged block -- a
-        substantial, independent reimplementation not attempted in this slice. Flagged explicitly
-        as the remaining open product question, not claimed as resolved.
+      - `DynamicTerrainCaveInRisk`: **not a required acceptance gate (scope correction, comment
+        54987)** -- Dynamic Terrain is itself deprecated/legacy (hence `legacy-dynamic-terrain`),
+        so coexisting with it is explicitly not something this ticket needs. Kept as merged,
+        historical, defense-in-depth rather than removed: it reads Dynamic Terrain's real, live
+        `caveInsEnabled` config (version-bounded against every verified `legacy-dynamic-terrain`
+        release, fail-closed on anything unverified or ambiguous) through NeoForge's public,
+        generic API, denying only when Dynamic Terrain is both loaded and confirmed actually
+        risky; absent entirely, there is no risk to check at all. `DynamicTerrainCaveInRiskVersionTest`,
+        `DynamicTerrainPairedGameTests`, and the opt-in `dt-paired-runtime.yml` workflow remain in
+        the codebase proving this real behavior (including a confirmed live config-reload probe),
+        but none of that is exercised by, or required for, this ticket's own acceptance going
+        forward -- no further implementation or review cycles are spent extending it.
       `ErosionAttempt`'s production path is: dedup claim, the accepted MINECRAFT-555
       slip-to-probability roll, a shuffled-direction-first-`canSmooth`-accepted candidate, both
       real checks above at that candidate's source and destination, then a re-verification before
@@ -233,4 +186,5 @@ the expected test count regresses. An opt-in `div-paired-runtime.yml` workflow a
 builds DIV fresh and boots everything together at DIV's real NeoForge floor. A second opt-in
 `dt-paired-runtime.yml` workflow boots this mod with a real, pinned Dynamic Terrain installed
 (never a default dependency) to prove `DynamicTerrainCaveInRisk`'s real behavior end to end --
-see the Status section above.
+historical/defense-in-depth evidence, not a required acceptance gate (scope correction, comment
+54987; see the Status section above).
