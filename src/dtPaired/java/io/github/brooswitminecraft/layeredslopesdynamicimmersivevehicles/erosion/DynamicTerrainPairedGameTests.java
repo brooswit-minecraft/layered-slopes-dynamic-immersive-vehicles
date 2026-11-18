@@ -205,24 +205,35 @@ public final class DynamicTerrainPairedGameTests {
             primaryFailure = t;
             throw t;
         } finally {
-            rewriteConfigFile(false);
-            boolean observedRevertToFalse = pollForValue(false, 5);
-            String onDiskAfterRevert;
+            // Review 54934's finding: a mid-cleanup exception (rewriteConfigFile's IOException
+            // wrapper, pollForValue's InterruptedException wrapper, or an unreadable config file)
+            // must be suppressed onto primaryFailure the same way the cleanup-failed assertion
+            // below already was -- not just the final check -- or it would REPLACE an earlier
+            // real test failure instead of being attached to it. The whole cleanup sequence is
+            // wrapped in one try/catch(Throwable) so every exit path from it goes through the
+            // same suppress-or-rethrow logic.
             try {
-                onDiskAfterRevert = Files.readString(DYNAMIC_TERRAIN_CONFIG_PATH, StandardCharsets.UTF_8)
-                        .lines()
-                        .filter(line -> line.startsWith(CAVE_INS_ENABLED_KEY))
-                        .findFirst().orElse("<missing>");
-            } catch (java.io.IOException e) {
-                onDiskAfterRevert = "<unreadable: " + e + ">";
-            }
-            boolean onDiskReflectsFalse = onDiskAfterRevert.contains("false");
-            if (!observedRevertToFalse || !onDiskReflectsFalse) {
-                AssertionError cleanupFailure = new AssertionError(
-                        "cleanup failed: Dynamic Terrain's own caveInsEnabled BooleanValue did not "
-                                + "revert to false (observed=" + observedRevertToFalse + ") and/or the "
-                                + "on-disk file does not reflect it (" + onDiskAfterRevert + ") -- this "
-                                + "static state would leak into later @GameTest methods in this run");
+                rewriteConfigFile(false);
+                boolean observedRevertToFalse = pollForValue(false, 5);
+                String onDiskAfterRevert;
+                try {
+                    onDiskAfterRevert = Files.readString(DYNAMIC_TERRAIN_CONFIG_PATH, StandardCharsets.UTF_8)
+                            .lines()
+                            .filter(line -> line.startsWith(CAVE_INS_ENABLED_KEY))
+                            .findFirst().orElse("<missing>");
+                } catch (java.io.IOException e) {
+                    throw new AssertionError("cleanup: failed to read back Dynamic Terrain's own "
+                            + "config file after reverting it", e);
+                }
+                boolean onDiskReflectsFalse = onDiskAfterRevert.contains("false");
+                if (!observedRevertToFalse || !onDiskReflectsFalse) {
+                    throw new AssertionError(
+                            "cleanup failed: Dynamic Terrain's own caveInsEnabled BooleanValue did not "
+                                    + "revert to false (observed=" + observedRevertToFalse + ") and/or the "
+                                    + "on-disk file does not reflect it (" + onDiskAfterRevert + ") -- this "
+                                    + "static state would leak into later @GameTest methods in this run");
+                }
+            } catch (Throwable cleanupFailure) {
                 if (primaryFailure != null) {
                     primaryFailure.addSuppressed(cleanupFailure);
                 } else {
