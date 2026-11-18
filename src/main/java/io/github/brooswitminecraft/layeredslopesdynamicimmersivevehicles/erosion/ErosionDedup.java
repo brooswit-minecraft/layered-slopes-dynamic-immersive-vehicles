@@ -65,4 +65,20 @@ public final class ErosionDedup {
     public synchronized int claimedCountForCurrentTick() {
         return claimedThisTick.size();
     }
+
+    /**
+     * Clears all tracked state, so the next {@link #tryClaim} call -- whatever tick it passes --
+     * is treated as the first one ever seen, never a regression. A caller holding this instance
+     * across more than one server lifetime (MINECRAFT-510 review finding: a static instance
+     * living for the whole mod-loaded JVM, e.g. across a singleplayer world switch within one
+     * running game client, would otherwise see the new server's tick counter restart at a value
+     * lower than the previous session's {@code highestTickSeen} and hit the regression guard's
+     * {@link IllegalStateException} on its very first real call) MUST call this at the start of
+     * each new server lifetime, before any {@link #tryClaim} call from that new lifetime.
+     */
+    public synchronized void reset() {
+        highestTickSeen = Long.MIN_VALUE;
+        hasSeenATick = false;
+        claimedThisTick.clear();
+    }
 }

@@ -47,4 +47,15 @@ final class WheelContactQueue {
         }
         return drained;
     }
+
+    /**
+     * Discards every currently-queued contact. MINECRAFT-510 review finding: a static instance
+     * living for the whole mod-loaded JVM (e.g. across a singleplayer world switch within one
+     * running game client) must not let a PRIOR server lifetime's leftover queued contacts --
+     * naming dimensions/positions/ticks from a world that may no longer even exist -- bleed into
+     * a new one. Callers must call this at the start of each new server lifetime.
+     */
+    void clear() {
+        queue.clear();
+    }
 }

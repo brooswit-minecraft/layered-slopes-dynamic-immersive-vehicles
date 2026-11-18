@@ -28,3 +28,12 @@ bump: minor
   job now actually compiles and boots this consumer against the real, merged DIV event class --
   though that job places no vehicle and drives nothing, so it proves compile/boot compatibility
   only, not live contact cadence; that remains a further, still-open gameplay-acceptance step.
+- Fixed a real lifecycle bug a review caught before any CI run proved it: `WheelContactQueue`
+  and `ErosionDedup` were held as `static` fields living for the whole mod-loaded JVM, not just
+  one server lifetime -- across a singleplayer world switch within one running game client, the
+  new server's tick counter restarting at a low value would have hit `ErosionDedup#tryClaim`'s
+  own regression guard and thrown `IllegalStateException` on its very first real call, and any
+  contacts left queued from the previous session (naming dimensions/positions that might no
+  longer exist) would have bled into the new one. Added `ErosionDedup#reset()` and
+  `WheelContactQueue#clear()`, both called from a new `ServerStartingEvent` listener. Added
+  focused `ErosionDedupTest` coverage for the new `reset()` contract.

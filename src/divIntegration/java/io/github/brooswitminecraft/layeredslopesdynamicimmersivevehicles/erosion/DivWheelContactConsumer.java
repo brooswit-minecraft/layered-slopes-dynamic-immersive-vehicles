@@ -6,6 +6,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 /**
@@ -52,8 +53,23 @@ public final class DivWheelContactConsumer implements ErosionWheelContactIntegra
 
     @Override
     public void register() {
+        NeoForge.EVENT_BUS.addListener(DivWheelContactConsumer::onServerStarting);
         NeoForge.EVENT_BUS.addListener(DivWheelContactConsumer::onWheelGroundContact);
         NeoForge.EVENT_BUS.addListener(DivWheelContactConsumer::onServerTickPost);
+    }
+
+    /**
+     * Review finding: {@link #QUEUE}/{@link #DEDUP} are {@code static}, living for the whole
+     * mod-loaded JVM -- e.g. across a singleplayer world switch within one running game client,
+     * NOT just one server lifetime. Without this reset, a new server's tick counter restarting
+     * at a value lower than the previous session's highest-seen tick would make {@link
+     * ErosionDedup#tryClaim} throw {@link IllegalStateException} on its very first real call,
+     * and any contacts left queued from the previous session (naming dimensions/positions that
+     * may no longer even exist) would bleed into the new one.
+     */
+    static void onServerStarting(ServerStartingEvent event) {
+        QUEUE.clear();
+        DEDUP.reset();
     }
 
     /** Snapshot-only: never touches the world. See this class's own doc for why. */
