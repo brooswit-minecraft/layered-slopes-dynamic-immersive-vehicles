@@ -214,11 +214,22 @@ This is a bounded, multi-slice implementation. Current slice:
       reads the real `ClientLevel` (built purely from received network packets) at a known
       position and reports what it actually observed. Proves erosionEnabled's real default
       (`false`) leaves the world genuinely unchanged from an actual, independently-connected
-      client's own perspective. The enabled/one-layer-mass-conservation and rejected/canceled-
-      unchanged cases remain open, later slices.
+      client's own perspective. That evidence is an initial-chunk-snapshot read -- the block was
+      placed and the attempt forced before the client ever joined -- not proof of a LIVE update.
+- [x] Client-sync acceptance, enabled one-layer-conservation case, with LIVE post-join update
+      evidence (direction, comment 55058/55111/55114): a second opt-in
+      `client-sync-acceptance-enabled.yml` workflow closes that gap -- the real headless client
+      is already connected and watching two positions, signals once it has genuinely captured a
+      baseline from its own `ClientLevel`, and only then does the forced attempt run. The client
+      must observe the real post-join transition: source becomes `dynamicterrain:layered_dirt`
+      with 15 layers, destination with 1 layer, 16 total conserved -- the same material
+      conservation `ErosionAttemptGameTests` already proves in isolation, now proven live from an
+      actual connected client's own perspective, using the exact same deterministic block
+      arrangement and `GUARANTEED_CHANCE_CONFIG` values. The rejected/canceled-unchanged case
+      remains an open, later slice.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), the enabled/rejected client-sync acceptance cases, multiplayer sync, and gameplay
+      above), the rejected/canceled client-sync acceptance case, multiplayer sync, and gameplay
       acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer

@@ -1,0 +1,257 @@
+name: Client-sync acceptance, enabled one-layer conservation case (opt-in)
+
+# Opt-in, CI-only, isolated runner (never Servy, never a shared/native-test-slot resource).
+# Direction (comment 55058/55111/55114): the merged default-OFF slice's evidence was an
+# initial-chunk-snapshot read -- the block was placed and the attempt forced BEFORE the client
+# ever joined, so the client's read happened as part of ordinary chunk sync on connect, not as
+# proof of a LIVE update being delivered. This slice proves that distinctly: the client is
+# already connected and watching two known positions BEFORE any mutation happens, the forced
+# erosion attempt (guaranteed to succeed via an extreme-but-valid test-only config, the exact
+# values ErosionAttemptGameTests' own GUARANTEED_CHANCE_CONFIG uses) runs only after the client
+# signals it has captured its baseline, and the client's own ClientLevel -- built purely from
+# received network packets -- must observe the real post-join transition, not a snapshot.
+#
+# Also verifies real material conservation: ErosionAttemptGameTests' own
+# withNoClaimModOrDynamicTerrainInstalledARealMoveStillAppliesAndConservesMaterial proves a full
+# dirt block smooths into exactly 15 (source) + 1 (destination) LAYERED_DIRT layers; this
+# workflow reuses the exact same deterministic block arrangement and config values, and the
+# client itself must observe that same 15+1 split arriving live.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/client-sync-acceptance-enabled.yml'
+      - 'build.gradle'
+      - 'gradle.properties'
+      - 'settings.gradle'
+      - 'gradle/wrapper/**'
+      - 'src/**'
+
+permissions:
+  contents: read
+
+jobs:
+  enabled-one-layer-client-sync-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: server-side
+      - uses: actions/checkout@v4
+        with:
+          path: client-side
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Install Xvfb, a software GL renderer (Mesa llvmpipe), and screenshot/input tooling for the headless client
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y xvfb mesa-utils libgl1-mesa-dri x11-apps imagemagick xdotool
+
+      - name: Pre-seed the server's offline-mode server.properties and a test-only enabled-erosion config before first boot
+        run: |
+          mkdir -p server-side/run/config client-side/run
+          echo "eula=true" > server-side/run/eula.txt
+          cat > server-side/run/server.properties <<'EOF'
+          online-mode=false
+          server-port=25578
+          level-seed=511
+          spawn-protection=0
+          EOF
+          # Exact values ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG uses: deliberately
+          # extreme-but-valid so the roll succeeds regardless of RandomSource seed (chance
+          # clamps to exactly 1.0) -- not the production defaults, used only by this opt-in
+          # test harness.
+          cat > server-side/run/config/layeredslopesdynamicimmersivevehicles-server.toml <<'EOF'
+          erosionEnabled = true
+          slipThresholdMs = 0.15
+          baseErosionPerTick = 1000.0
+          referenceSlipMs = 10.0
+          referenceLoadKg = 300.0
+          maxSlipFactor = 3.0
+          minLoadFactor = 0.25
+          maxLoadFactor = 4.0
+          EOF
+
+      - name: Boot a real server, wait for join, watch the client's baseline, trigger the live mutation, verify the client's own observed transition, then stop both gracefully
+        run: |
+          set -o pipefail
+          cd server-side
+          mkfifo stdin.pipe
+          exec 9<>stdin.pipe
+          timeout 900 ./gradlew runServer --no-daemon -PerosionClientSyncTest=true \
+            < stdin.pipe > server-boot.log 2>&1 &
+          server_pid=$!
+          cd ..
+
+          for i in $(seq 1 120); do
+            grep -q 'Done (' server-side/server-boot.log 2>/dev/null && break
+            sleep 2
+          done
+          if ! grep -q 'Done (' server-side/server-boot.log; then
+            echo "::error::server never reported 'Done (' -- see server-boot.log"
+            cat server-side/server-boot.log
+            exit 1
+          fi
+
+          # Deterministic arrangement from ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor:
+          # source=dirt, east=air, east-below=stone (anchor), the other three horizontal
+          # neighbors=stone (so east is the only feasible direction regardless of RNG shuffle
+          # order). Force-load the chunk first -- nobody has been near it yet.
+          printf 'forceload add 0 0\n' > server-side/stdin.pipe
+          sleep 2
+          for attempt in 1 2 3 4 5; do
+            {
+              printf 'setblock 0 -59 0 minecraft:dirt\n'
+              printf 'setblock 1 -59 0 minecraft:air\n'
+              printf 'setblock 1 -60 0 minecraft:stone\n'
+              printf 'setblock -1 -59 0 minecraft:stone\n'
+              printf 'setblock 0 -59 1 minecraft:stone\n'
+              printf 'setblock 0 -59 -1 minecraft:stone\n'
+            } > server-side/stdin.pipe
+            sleep 3
+            grep -qF 'Changed the block at 0, -59, 0' server-side/server-boot.log 2>/dev/null && break
+            echo "diagnostic: setup attempt $attempt did not land yet, retrying"
+          done
+          if ! grep -qF 'Changed the block at 0, -59, 0' server-side/server-boot.log; then
+            echo "::error::world setup never reached the server after 5 attempts -- see server-boot.log tail:"
+            tail -20 server-side/server-boot.log
+            kill -9 "$server_pid" 2>/dev/null || true
+            exit 1
+          fi
+
+          Xvfb :99 -screen 0 1280x720x24 &
+          xvfb_pid=$!
+          sleep 2
+          export DISPLAY=:99
+
+          cd client-side
+          timeout 600 ./gradlew runClient --no-daemon \
+              -PerosionClientSyncLiveProbe=true \
+              -PerosionClientSyncQuickPlay=localhost:25578 \
+              -PerosionClientSyncLiveProbeSourcePos=0,-59,0 \
+              -PerosionClientSyncLiveProbeDestPos=1,-59,0 \
+              -PerosionClientSyncLiveProbeReadySignalFile="$(pwd)/client-ready-signal.txt" \
+              -PerosionClientSyncLiveProbeOutputFile="$(pwd)/client-live-probe-result.txt" \
+            > client-boot.log 2>&1 &
+          client_pid=$!
+          cd ..
+
+          for i in $(seq 1 30); do
+            grep -qF 'Loaded 0 entity animations' client-side/client-boot.log 2>/dev/null && break
+            sleep 2
+          done
+          for attempt in 1 2 3 4 5 6; do
+            DISPLAY=:99 xdotool mousemove 638 567 2>>client-side/xdotool.log || true
+            sleep 1
+            DISPLAY=:99 xdotool mousedown 1 2>>client-side/xdotool.log || true
+            sleep 1
+            DISPLAY=:99 xdotool mouseup 1 2>>client-side/xdotool.log || true
+            grep -qE 'joined the game' server-side/server-boot.log 2>/dev/null && break
+            sleep 7
+          done
+          if ! grep -qE 'joined the game' server-side/server-boot.log; then
+            echo "::error::no player ever joined the server -- the headless client did not connect. client-boot.log:"
+            cat client-side/client-boot.log || true
+            kill -9 "$server_pid" "$client_pid" "$xvfb_pid" 2>/dev/null || true
+            exit 1
+          fi
+          printf 'tp @a 0 -60.5 0\n' > server-side/stdin.pipe
+          sleep 3
+
+          # The client must signal it has genuinely captured a baseline from its own ClientLevel
+          # BEFORE the mutation is triggered -- this is the whole point of this slice: the
+          # change must arrive as a live update to an already-connected, already-watching
+          # client, never something already present at join.
+          ready=false
+          for i in $(seq 1 60); do
+            if [ -f client-side/client-ready-signal.txt ]; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != "true" ]; then
+            echo "::error::the client never signaled that it captured its baseline -- it may never have tracked the target chunk. client-boot.log:"
+            cat client-side/client-boot.log || true
+            kill -9 "$server_pid" "$client_pid" "$xvfb_pid" 2>/dev/null || true
+            exit 1
+          fi
+
+          # Only now, after the client has confirmed its baseline, trigger the real mutation.
+          printf 'erosionclientsynctest 0 -59 0 5.0 300.0\n' > server-side/stdin.pipe
+          sleep 3
+          if ! grep -qF 'erosionclientsynctest outcome=APPLIED' server-side/server-boot.log; then
+            echo "::error::expected 'erosionclientsynctest outcome=APPLIED' in the server log -- the forced attempt did not succeed. server-boot.log tail:"
+            tail -20 server-side/server-boot.log
+            kill -9 "$server_pid" "$client_pid" "$xvfb_pid" 2>/dev/null || true
+            exit 1
+          fi
+
+          found=false
+          for i in $(seq 1 90); do
+            if [ -s client-side/client-live-probe-result.txt ]; then
+              found=true
+              break
+            fi
+            sleep 2
+          done
+
+          echo "stop" > server-side/stdin.pipe
+          graceful=false
+          for i in $(seq 1 30); do
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              graceful=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$graceful" != "true" ]; then
+            kill -9 "$server_pid" 2>/dev/null || true
+          fi
+          kill -9 "$client_pid" 2>/dev/null || true
+          kill -9 "$xvfb_pid" 2>/dev/null || true
+          exec 9>&-
+          rm -f server-side/stdin.pipe
+
+          if [ "$found" != "true" ]; then
+            echo "::error::the client never wrote a live-probe result. client-boot.log:"
+            cat client-side/client-boot.log || true
+            exit 1
+          fi
+          cat client-side/client-live-probe-result.txt
+          status=$(sed -n '1p' client-side/client-live-probe-result.txt)
+          source_block=$(sed -n '2p' client-side/client-live-probe-result.txt)
+          source_layers=$(sed -n '3p' client-side/client-live-probe-result.txt)
+          dest_block=$(sed -n '4p' client-side/client-live-probe-result.txt)
+          dest_layers=$(sed -n '5p' client-side/client-live-probe-result.txt)
+
+          if [ "$status" != "CHANGED" ]; then
+            echo "::error::expected the client to observe a real live CHANGE after connecting, got status '$status' (timed out watching with no transition)"
+            exit 1
+          fi
+          if [ "$source_block" != "dynamicterrain:layered_dirt" ] || [ "$source_layers" != "15" ]; then
+            echo "::error::expected the client to observe the source as dynamicterrain:layered_dirt with 15 layers, got '$source_block' layers=$source_layers"
+            exit 1
+          fi
+          if [ "$dest_block" != "dynamicterrain:layered_dirt" ] || [ "$dest_layers" != "1" ]; then
+            echo "::error::expected the client to observe the destination as dynamicterrain:layered_dirt with 1 layer, got '$dest_block' layers=$dest_layers"
+            exit 1
+          fi
+          echo "confirmed: a real, already-connected client independently observed a LIVE post-join block-update transition -- source became layered_dirt with 15 layers, destination became layered_dirt with 1 layer, 16 total layers conserved -- genuine client-synchronization evidence of the enabled, one-layer-conserving case"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: client-sync-acceptance-enabled-evidence
+          path: |
+            server-side/server-boot.log
+            client-side/client-boot.log
+            client-side/client-live-probe-result.txt
+            client-side/client-ready-signal.txt
+          if-no-files-found: warn

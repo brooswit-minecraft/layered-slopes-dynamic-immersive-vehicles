@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
 
+import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionClientSyncLiveProbe;
 import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionClientSyncProbe;
 import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionClientSyncTestCommand;
 import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionModConfig;
@@ -47,6 +48,9 @@ public class LayeredSlopesDynamicImmersiveVehiclesMod {
         // distribution, which physically lacks the client-only classes it references.
         if (FMLEnvironment.dist == Dist.CLIENT && ErosionClientSyncProbe.isEnabled()) {
             NeoForge.EVENT_BUS.addListener(ErosionClientSyncProbe::onClientTick);
+        }
+        if (FMLEnvironment.dist == Dist.CLIENT && ErosionClientSyncLiveProbe.isEnabled()) {
+            NeoForge.EVENT_BUS.addListener(ErosionClientSyncLiveProbe::onClientTick);
         }
         LOGGER.info("Layered Slopes Dynamic Immersive Vehicles loaded (erosion consumer not yet wired up)");
     }
