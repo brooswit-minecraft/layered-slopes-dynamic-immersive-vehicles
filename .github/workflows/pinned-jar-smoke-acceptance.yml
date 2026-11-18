@@ -32,9 +32,12 @@ name: Pinned-jar smoke acceptance (opt-in)
 # saved) are asserted too. `replacement-stack-smoke` also asserts the real generated
 # `layeredslopesdynamicimmersivevehicles-server.toml` actually defaults `erosionEnabled` to
 # `false` -- not assumed from the source code, read from the file the real packaged jar
-# genuinely wrote. This slice still does NOT install or boot DIV at all (no stable, pinnable
-# DIV release exists yet -- same blocker as the contact-telemetry seam); DIV-alone/base-DIV
-# isolation and the full DIV replacement stack remain explicitly open, see README.
+# genuinely wrote. This slice still does NOT install or boot DIV at all. Per review 55019: "no
+# stable, pinnable DIV release" is NOT itself a blocker for that -- div-paired-runtime.yml
+# already builds DIV fresh from a verified, pinned commit SHA for its own paired-runtime check,
+# and a future slice should reuse that same source-build pipeline here. DIV-alone/base-DIV
+# isolation and the full DIV replacement stack remain an open next CI slice, not blocked on a
+# nonexistent public release; see README.
 on:
   workflow_dispatch:
   pull_request:

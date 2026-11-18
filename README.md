@@ -181,14 +181,20 @@ This is a bounded, multi-slice implementation. Current slice:
       production server has no GameTest harness); success is the real startup/shutdown/mod-list/
       config evidence, never a bare process exit code.
 
-      **Not yet covered, named explicitly** (review 55009): DIV-alone/base-DIV isolation, and
-      the full DIV replacement stack (compat + DIV + layered-slopes/grading together) -- both
-      blocked on DIV having no stable, pinnable release yet, the same blocker as the
-      contact-telemetry seam below.
+      **Not yet covered, named explicitly** (review 55009/55019): DIV-alone/base-DIV isolation,
+      and the full DIV replacement stack (compat + DIV + layered-slopes/grading together). "No
+      stable DIV release" is NOT a blocker here -- `div-paired-runtime.yml` already builds DIV
+      fresh from a verified, pinned commit SHA for exactly this purpose; a future slice should
+      reuse that same source-build pipeline (hash/manifest the real packaged jar and its
+      resolved dependencies, then boot it the same way this workflow boots the current stack),
+      an open next CI slice rather than something blocked on a nonexistent prerequisite. This is
+      independent of the MINECRAFT-545-gated `PhysicsBridge`/contact-telemetry work below, which
+      remains a real, separate hold.
 - [ ] DIV's actual per-wheel call site into `ErosionAttempt` (needs DIV to expose contact
       telemetry -- blocked on MINECRAFT-545 PR #39's active `PhysicsBridge.java` changes, see
-      above), DIV-alone isolation and the full DIV replacement-stack smoke case once a stable
-      DIV release exists, multiplayer sync, and gameplay acceptance evidence.
+      above), DIV-alone isolation and the full DIV replacement-stack smoke case (an open next CI
+      slice reusing `div-paired-runtime.yml`'s pinned-commit source build, not blocked on a
+      public DIV release), multiplayer sync, and gameplay acceptance evidence.
 
 No dependency on Dynamic Terrain or Dynamic Vehicles exists or is planned. The erosion consumer
 defaults to OFF via this mod's own real `erosionEnabled` server config (default `false`, see
