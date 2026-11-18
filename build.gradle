@@ -331,6 +331,12 @@ neoForge {
             // Auto-join a local dedicated server headlessly (direction 55058/55063): only when
             // the harness opts in -- an ordinary ./gradlew runClient never gets these arguments.
             if ((findProperty('erosionClientSyncProbe') ?: 'false') == 'true') {
+                // Vanilla's quickplay system also requires --quickPlayPath (it logs quickplay
+                // session state there) -- CI's first real run observed the client sit at
+                // texture/animation loading forever with zero connection activity on either
+                // side, consistent with quickplay silently never activating without it.
+                programArgument '--quickPlayPath'
+                programArgument (findProperty('erosionClientSyncQuickPlayLogPath') ?: 'quickplay-log.json') as String
                 programArgument '--quickPlayMultiplayer'
                 programArgument (findProperty('erosionClientSyncQuickPlay') ?: 'localhost:25577') as String
             }
