@@ -144,6 +144,32 @@ if (pairedRuntime) {
             content { includeGroup 'curse.maven' }
         }
     }
+
+    // An exact, verifiable manifest of what paired-runtime actually resolved -- review 54855:
+    // the CI workflow previously globbed every "*sable*"/"*minecraft-transport-simulator*" jar
+    // out of the whole shared Gradle module cache, which could pick up an unrelated same-named
+    // file from some other build on the runner, not necessarily THIS run's own resolution.
+    // Querying runtimeClasspath's own ResolvedArtifacts instead names exactly the three
+    // coordinates this build.gradle itself declared above, nothing else.
+    tasks.register("pairedRuntimeManifest") {
+        doLast {
+            def wanted = [
+                    'curse.maven:minecraft-transport-simulator-286703',
+                    'dev.ryanhcode.sable:sable-neoforge-1.21.1',
+                    'dev.ryanhcode.sable-companion:sable-companion-common-1.21.1',
+            ] as Set
+            def digest = java.security.MessageDigest.getInstance("SHA-256")
+            configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts.each { art ->
+                def id = art.moduleVersion.id
+                def key = "${id.group}:${id.name}"
+                if (wanted.contains(key)) {
+                    digest.reset()
+                    def hash = digest.digest(art.file.bytes).encodeHex().toString()
+                    println "${key}:${id.version} file=${art.file.name} sha256=${hash}"
+                }
+            }
+        }
+    }
 }
 
 base {

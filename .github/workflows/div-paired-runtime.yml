@@ -90,15 +90,23 @@ jobs:
         run: |
           ./gradlew build --no-daemon \
             "-PdivLocalJar=${{ steps.divjar.outputs.path }}" \
-            -PpairedRuntime=true
+            -PpairedRuntime=true \
+            -Pneo_version=21.1.265
 
       - name: Boot a real dedicated server with DIV, this mod, and every DIV-required dependency loaded
         working-directory: compat
         run: |
           set -o pipefail
+          # -Pneo_version=21.1.265 overrides the ordinary default (21.1.250) for this paired job
+          # only: DIV's own neoforge.mods.toml requires >=21.1.265 to boot at all, which this
+          # mod's own default build-time floor is deliberately NOT raised to match (see
+          # gradle.properties) -- a real GitHub Actions runner, unlike this project's earlier
+          # local-sandbox toolchain failures at that exact version, is the actual place this can
+          # be tested.
           ./gradlew runGameTestServer --no-daemon \
             "-PdivLocalJar=${{ steps.divjar.outputs.path }}" \
             -PpairedRuntime=true \
+            -Pneo_version=21.1.265 \
             2>&1 | tee paired-runtime-boot.log
           # StandaloneBootGameTests.theGameTestHarnessBootsForThisMod is a real, passing test as
           # of this slice -- this now has a genuine successful terminal result to require,
@@ -124,10 +132,15 @@ jobs:
           echo "0 missing mod requirements confirmed, all 7 expected mod ids present"
 
       - name: Record an immutable resolved-dependency manifest
+        if: always()
         working-directory: compat
         run: |
           {
             echo "# DIV paired-runtime manifest -- $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "runner_os=$(uname -a)"
+            echo "java_version=$(java -version 2>&1 | head -n1)"
+            echo "gradle_version=$(./gradlew --version 2>&1 | grep '^Gradle')"
+            echo "neo_version_requested=21.1.265"
             echo "div_commit=${{ steps.divcommit.outputs.sha }}"
             echo "div_jar=dynamic-immersive-vehicles-0.1.0-SNAPSHOT.jar"
             echo "div_jar_sha256=${{ steps.divjar.outputs.sha256 }}"
@@ -135,12 +148,11 @@ jobs:
             echo "layeredslopes_sha512=$(grep '^layeredslopes_sha512=' gradle.properties | cut -d= -f2)"
             echo "layeredslopegrading_version=$(grep '^layeredslopegrading_version=' gradle.properties | cut -d= -f2)"
             echo "layeredslopegrading_sha512=$(grep '^layeredslopegrading_sha512=' gradle.properties | cut -d= -f2)"
-            echo "mts_coordinate=curse.maven:minecraft-transport-simulator-286703:7926606"
-            echo "sable_coordinate=dev.ryanhcode.sable:sable-neoforge-1.21.1:2.0.5"
-            echo "sablecompanion_coordinate=dev.ryanhcode.sable-companion:sable-companion-common-1.21.1:1.6.0"
-            echo "--- resolved paired-runtime jar files and their sha256 ---"
-            find ~/.gradle/caches/modules-2 -iname '*minecraft-transport-simulator*.jar' -o -iname '*sable*.jar' 2>/dev/null \
-              | sort | xargs -r sha256sum
+            echo "--- resolved paired-runtime dependencies (exact coordinates this build.gradle declared, not a cache-wide glob) ---"
+            ./gradlew pairedRuntimeManifest --no-daemon --console=plain \
+              "-PdivLocalJar=${{ steps.divjar.outputs.path }}" \
+              -PpairedRuntime=true \
+              -Pneo_version=21.1.265 2>&1 | grep -E '^(curse\.maven|dev\.ryanhcode)' || echo "(no paired-runtime dependencies resolved -- see full task output on failure)"
           } > paired-runtime-manifest.txt
           cat paired-runtime-manifest.txt
 
