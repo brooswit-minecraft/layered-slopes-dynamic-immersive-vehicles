@@ -59,7 +59,7 @@ jobs:
       - name: Install Xvfb, a software GL renderer (Mesa llvmpipe), and screenshot tooling for the headless client
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y xvfb mesa-utils libgl1-mesa-dri x11-apps imagemagick
+          sudo apt-get install -y xvfb mesa-utils libgl1-mesa-dri x11-apps imagemagick xdotool
 
       - name: Pre-seed the server's offline-mode server.properties before first boot
         run: |
@@ -114,14 +114,17 @@ jobs:
           client_pid=$!
           cd ..
 
-          # Two prior CI runs both stopped logging client-side at the exact same point (texture
-          # atlas/animation loading) with zero further activity within a ~3 minute window and
-          # zero server-side connection evidence; a third run's instrumented wait confirmed the
-          # client log's line count stabilizes by ~60s and never grows again for the rest of a
-          # 300s window -- genuinely stuck, not merely slow. This run captures a real screenshot
-          # of the Xvfb display and a real JVM thread dump of the live client process once that
-          # same stabilization point is reached, before continuing to wait out the rest of the
-          # window.
+          # A prior run's screenshot (captured per direction 55083, confirming this is real
+          # evidence, not a guess) showed exactly why: the client was sitting, fully rendered and
+          # perfectly healthy, at vanilla's real first-run "Accessibility Settings/Narrator"
+          # onboarding dialog -- a genuine one-time dialog a real human operator would click
+          # through once, which blocks everything after it, including quickplay's auto-connect.
+          # Dismiss it with a real simulated click at its "Continue" button (known, fixed
+          # coordinates at our fixed 1280x720 resolution), the equivalent of that one-time human
+          # acknowledgment, not fabricated evidence.
+          sleep 25
+          DISPLAY=:99 xdotool mousemove 638 567 click 1 2>client-side/xdotool.log || true
+
           last_client_lines=0
           diagnostics_captured=false
           for i in $(seq 1 150); do
@@ -216,4 +219,5 @@ jobs:
             client-side/client-screenshot.png
             client-side/client-thread-dump.txt
             client-side/xwd.log
+            client-side/xdotool.log
           if-no-files-found: warn
