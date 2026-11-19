@@ -189,3 +189,16 @@ bump: minor
   own destination's other 3 sides (its own real west side is already the one real connection to
   its source) into a genuinely isolated 2-cell pocket, per John's own suggested alternative,
   so a real transfer can never spill beyond what this check can actually see.
+- Real self-review kickback on this exact PR (Jira comment 55318), re-confirming a gap this
+  class had only disclosed (direction comment 55304), not fixed: a genuine GameTest
+  `timeoutTicks` expiry is detected by the framework's own tick loop directly calling {@code
+  GameTestInfo#fail(...)}, never through any exception this class's own code could catch, so a
+  timeout mid-phase would leave `GuaranteedChanceOverrideGuard#release()` un-called and the
+  vehicle unremoved -- contaminating later GameTests' own evidence. Fixed by registering a real
+  `GameTestListener` directly on `helper.testInfo`, whose `testPassed`/`testFailed` both call
+  the already-idempotent `cleanup()` -- confirmed, via the framework's own decompiled
+  `GameTestInfo#tick`, to fire for every real completion of this test by any cause (timeout
+  included), independent of whether this class's own code is ever re-entered. Also closed a
+  second, related gap: `spawnVehicle` now assigns `ctx.handle` immediately once the real entity
+  exists in the world, before any part is attached, so a throw partway through attaching parts
+  no longer leaves an unconfigured entity with nothing holding a reference to it.

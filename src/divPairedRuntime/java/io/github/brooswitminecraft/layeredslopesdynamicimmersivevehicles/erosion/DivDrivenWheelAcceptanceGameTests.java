@@ -33,6 +33,9 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.gametest.framework.GameTestInfo;
+import net.minecraft.gametest.framework.GameTestListener;
+import net.minecraft.gametest.framework.GameTestRunner;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.common.NeoForge;
@@ -128,16 +131,23 @@ public final class DivDrivenWheelAcceptanceGameTests {
      * from every exit path this class's own code can throw from, including each individual
      * recursive drive step (review finding, direction comment 55300: the recursive {@code
      * runAfterDelay} chain schedules later callbacks OUTSIDE the enclosing method's own initial
-     * try/catch). Disclosed, NOT yet covered (review finding, direction comment 55304, correctly
-     * flagging this as an open exact-head item rather than letting it pass as "every exit
-     * handled"): a genuine GameTest {@code timeoutTicks} expiry is detected by the framework's
-     * own tick loop directly calling {@code fail(...)}, never through any exception this class's
-     * code could catch, so a timeout mid-phase-one (before {@link
-     * GuaranteedChanceOverrideGuard#release()} ever runs) would still leave the override forced
-     * and the vehicle unremoved; a {@link #spawnVehicle} call that throws partway through
-     * (after the entity exists but before every part is attached) would also leave an
-     * unconfigured entity behind, since {@code ctx.handle} is only assigned once that call
-     * returns successfully.
+     * try/catch).
+     *
+     * <p>Previously disclosed as NOT covered (review finding, direction comment 55304, then
+     * re-confirmed as still required by a self-review kickback on this exact PR, Jira comment
+     * 55318): a genuine GameTest {@code timeoutTicks} expiry is detected by the framework's own
+     * tick loop directly calling {@code GameTestInfo#fail(...)}, never through any exception
+     * this class's own code could catch, so a timeout mid-phase would previously have left
+     * {@link GuaranteedChanceOverrideGuard#release()} un-called and the vehicle unremoved. Now
+     * covered: {@link #runDrivenWheelPhase} registers a {@code GameTestListener} directly on
+     * {@code helper.testInfo} whose {@code testPassed}/{@code testFailed} both call {@code
+     * cleanup()} -- confirmed, via the framework's own decompiled {@code GameTestInfo#tick}, to
+     * fire for EVERY real completion of this test (success or failure, by any cause, timeout
+     * included), independent of whether this class's own code is ever re-entered again. {@link
+     * #spawnVehicle} also now assigns {@code ctx.handle} immediately once the real entity
+     * exists in the world (before any part is attached), rather than only once that whole
+     * method returns, so a throw partway through attaching parts no longer leaves an
+     * unconfigured entity behind that nothing holds a reference to.
      */
     private static final class TestContext {
         VehicleHandle handle;
@@ -337,6 +347,38 @@ public final class DivDrivenWheelAcceptanceGameTests {
             boolean expectApplied, boolean releaseGuardOnCleanup, Runnable onDone) {
         TestContext ctx = new TestContext();
         ctx.releaseGuardOnCleanup = releaseGuardOnCleanup;
+        // Real review finding (PR #19 comment, self-review kickback, Jira comment 55318):
+        // a genuine GameTest timeoutTicks expiry (or any other framework-driven failure, e.g.
+        // a later batch-mate's own assertion) is detected by the framework's OWN tick loop
+        // directly calling GameTestInfo#fail(...), never through any exception this class's
+        // own code could catch -- the try/catch and per-step guards below only cover exceptions
+        // thrown from THIS class's own code, not a timeout that simply stops re-entering it.
+        // GameTestInfo#addListener's own testPassed/testFailed callbacks ARE invoked by the
+        // framework for every real completion of this test, success OR failure, REGARDLESS of
+        // cause (confirmed via the framework's own decompiled GameTestInfo#tick, which checks
+        // isDone()/hasFailed() every tick and dispatches to every registered listener) -- unlike
+        // this class's own try/catch, this one doesn't depend on being re-entered at all.
+        // ctx.cleanup() is idempotent, so registering this is additive, never a double-release
+        // hazard, on top of every existing explicit cleanup() call below.
+        helper.testInfo.addListener(new GameTestListener() {
+            @Override
+            public void testStructureLoaded(GameTestInfo info) {
+            }
+
+            @Override
+            public void testPassed(GameTestInfo info, GameTestRunner runner) {
+                ctx.cleanup();
+            }
+
+            @Override
+            public void testFailed(GameTestInfo info, GameTestRunner runner) {
+                ctx.cleanup();
+            }
+
+            @Override
+            public void testAddedForRerun(GameTestInfo before, GameTestInfo after, GameTestRunner runner) {
+            }
+        });
         try {
             // Real CI failure on this exact head (run 44451489283): chassisReceipt/classify
             // confirmed real Body activation, and the vehicle genuinely built real speed (~5
@@ -358,7 +400,7 @@ public final class DivDrivenWheelAcceptanceGameTests {
             BlockPos originAbsolute = helper.absolutePos(BlockPos.ZERO);
             ctx.originX = originAbsolute.getX();
             ctx.originZ = originAbsolute.getZ();
-            ctx.handle = spawnVehicle(level, spawnAbsolute);
+            spawnVehicle(level, spawnAbsolute, ctx);
             // Diagnostic (MINECRAFT-510, review finding Jira comment 55308): real localPos
             // telemetry across 3 real CI runs showed this vehicle only ever travels/circles
             // within ~1-2 blocks of its own spawn point, never sweeping across the grid the way
@@ -588,7 +630,7 @@ public final class DivDrivenWheelAcceptanceGameTests {
      * vehicle genuinely falls and settles onto real ground, confirming real wheel contact,
      * rather than starting already perfectly resting.
      */
-    private static VehicleHandle spawnVehicle(ServerLevel level, BlockPos surfacePos) {
+    private static VehicleHandle spawnVehicle(ServerLevel level, BlockPos surfacePos, TestContext ctx) {
         var packSpeedFactors = ConfigSystem.settings.general.packSpeedFactors.value;
         var packVehicleScales = ConfigSystem.settings.general.packVehicleScales.value;
         packSpeedFactors.putIfAbsent(PACK_ID, 1.0);
@@ -608,13 +650,22 @@ public final class DivDrivenWheelAcceptanceGameTests {
         vehicle.position.set(surfacePos.getX() + 0.5, surfacePos.getY() + 1.0, surfacePos.getZ() + 0.5);
         vehicle.orientation.set(new RotationMatrix());
         world.spawnEntity(vehicle);
+        // Real review finding (self-review kickback, Jira comment 55318): capture the handle
+        // immediately once the real entity exists in the world, before any part is attached --
+        // if addWheel/addEngine below throws, ctx.cleanup() (via the unconditional
+        // testPassed/testFailed listener registered in runDrivenWheelPhase, or any of this
+        // class's own catch blocks) can still remove this real spawned entity rather than
+        // leaking it. cleanup() only ever needs handle.vehicle, never handle.engine, so a null
+        // engine here is safe.
+        ctx.handle = new VehicleHandle(vehicle, null);
 
         addWheel(vehicle, wheelSlotFL);
         addWheel(vehicle, wheelSlotFR);
         addWheel(vehicle, wheelSlotRL);
         addWheel(vehicle, wheelSlotRR);
         PartEngine engine = addEngine(vehicle, engineSlot);
-        return new VehicleHandle(vehicle, engine);
+        ctx.handle = new VehicleHandle(vehicle, engine);
+        return ctx.handle;
     }
 
     private static JSONVehicle buildVehicleDefinition(String systemName) {
