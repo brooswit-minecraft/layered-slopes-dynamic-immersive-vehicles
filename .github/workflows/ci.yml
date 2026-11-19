@@ -27,18 +27,74 @@ jobs:
       - name: Check the mod does not require a newer NeoForge than the pack runs
         run: python3 scripts/check_neoforge_floor.py
 
-      - name: Build and test
-        run: ./gradlew build --no-daemon
-
       # StandaloneBootGameTests.theGameTestHarnessBootsForThisMod is the first real GameTest
-      # (trivial -- no erosion consumer yet, only proof the harness boots for this mod).
-      # check_gametest_count.py fails closed unless exactly this count completed and passed, not
-      # just a green exit code.
+      # (trivial -- no erosion consumer yet, only proof the harness boots for this mod). Runs
+      # WITHOUT -PdivLocalJar (DIV absent from the classpath here, deliberately): booting a real
+      # dedicated server with DIV present would also load DIV itself as a mod, which requires
+      # DIV's own neo_version floor and its own mts/Sable/Sable-Companion dependencies -- exactly
+      # what div-paired-runtime.yml's separate, opt-in job already exists to prove, with those
+      # extra dependencies wired in. Keeping this plain boot-smoke step DIV-free keeps it fast and
+      # avoids duplicating that other job's job here. check_gametest_count.py fails closed unless
+      # exactly this count completed and passed, not just a green exit code.
       - name: Run GameTests
         run: |
           set -o pipefail
           ./gradlew runGameTestServer --no-daemon 2>&1 | tee gametest.log
           python3 scripts/check_gametest_count.py gametest.log
+
+      # MINECRAFT-510 (direction, comment 55251): "src/divIntegration and provider metadata
+      # currently disappear from a normal build, leaving a nonfunctional wheel-erosion artifact
+      # ... DIV's missing public release does not prevent an immutable source-pinned dependency
+      # build and verified jar hashing, already exercised by paired CI." Reuses exactly that
+      # already-proven route (div-paired-runtime.yml's own checkout-and-build steps) so the jar
+      # this job uploads below -- the real, intended ordinary deliverable -- actually contains
+      # the production DIV wheel-contact consumer, not just test-only/opt-in builds.
+      - name: Read the pinned DIV ref from gradle.properties (single source of truth)
+        id: divpin
+        run: echo "ref=$(grep '^div_pinned_ref=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out DIV at the pinned ref
+        uses: actions/checkout@v4
+        with:
+          repository: brooswit-minecraft/dynamic-immersive-vehicles
+          ref: ${{ steps.divpin.outputs.ref }}
+          path: div
+
+      - name: Set up Gradle 8.8 (DIV's own proven toolchain, matches its ci.yml)
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.8'
+
+      - name: Build DIV from the pinned source commit
+        working-directory: div
+        run: gradle --no-daemon --stacktrace clean build -x test
+
+      - name: Verify exactly one DIV jar was produced, and its sha256 matches the pinned value
+        id: divjar
+        run: |
+          expected="div/build/libs/dynamic-immersive-vehicles-0.1.0-SNAPSHOT.jar"
+          if [ ! -f "$expected" ]; then
+            echo "::error::expected DIV artifact '$expected' was not produced -- found instead:"
+            ls -la div/build/libs/ || true
+            exit 1
+          fi
+          actual_count=$(find div/build/libs -maxdepth 1 -name '*.jar' | wc -l)
+          if [ "$actual_count" -ne 1 ]; then
+            echo "::error::expected exactly 1 jar under div/build/libs, found $actual_count:"
+            ls -la div/build/libs/
+            exit 1
+          fi
+          actual_sha256=$(sha256sum "$expected" | cut -d' ' -f1)
+          pinned_sha256=$(grep '^div_pinned_jar_sha256=' gradle.properties | cut -d= -f2)
+          if [ "$actual_sha256" != "$pinned_sha256" ]; then
+            echo "::error::DIV jar sha256 mismatch for pinned ref ${{ steps.divpin.outputs.ref }}: expected $pinned_sha256, got $actual_sha256 -- refusing to build against an unverified jar"
+            exit 1
+          fi
+          echo "DIV jar sha256 verified: $actual_sha256"
+          echo "path=$(readlink -f "$expected")" >> "$GITHUB_OUTPUT"
+
+      - name: Build and test (with the verified, pinned DIV jar on the classpath)
+        run: ./gradlew build --no-daemon "-PdivLocalJar=${{ steps.divjar.outputs.path }}"
 
       - name: Upload mod jar
         uses: actions/upload-artifact@v4

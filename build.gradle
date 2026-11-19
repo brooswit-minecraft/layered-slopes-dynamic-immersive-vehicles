@@ -183,19 +183,25 @@ if (incompatibleVersionDependency == "layeredslopegrading") {
     }
 }
 
-// Opt-in paired-runtime check (MINECRAFT-510, direction 54843): DIV has no stable release to
-// pin, so there is no download-and-verify task here -- `-PdivLocalJar=<path>` (a jar built
-// fresh from DIV's own pinned commit, e.g. by the div-paired-runtime.yml workflow) is the ONLY
-// way to put DIV on the classpath at all. Omitting it (the default for every ordinary build)
-// means DIV is simply absent -- never a required, always-on dependency.
+// DIV still has no stable release to pin by version/sha512 (see gradle.properties'
+// div_version/div_sha512 comments), so there is no download-and-verify task HERE the way there
+// is for layered-slopes/layered-slope-grading above -- `-PdivLocalJar=<path>` is this build's
+// only way to put a DIV jar on the classpath at all. That flag is NOT normally hand-supplied by
+// a contributor, though: ci.yml's own "Build and test" step supplies it automatically, built
+// fresh from gradle.properties' pinned div_pinned_ref and verified against div_pinned_jar_sha256
+// first (direction, comment 55251: "an immutable source-pinned dependency build and verified
+// jar hashing, already exercised by paired CI" -- the exact route div-paired-runtime.yml already
+// proved, reused here for the real uploaded build artifact rather than just an opt-in smoke
+// test). A plain local `./gradlew build` with no flags still omits DIV entirely -- this is a
+// property of what the invoker chooses to pass, not a structural restriction in this file.
 def localDivJar = findProperty("divLocalJar")
 def divJar = localDivJar ? layout.projectDirectory.file(localDivJar as String) : null
 
 // MINECRAFT-510 (direction comment 55238/M55554611): the real DIV wheel-contact consumer lives
 // in src/divIntegration, the SAME "only added to the compiled sourceSet under this opt-in flag"
-// shape dtPairedRuntime below already uses for DynamicTerrainPairedGameTests -- never part of
-// the default build/test, since these classes import io.github.brooswitminecraft.div types
-// that only resolve when divJar is actually present.
+// shape dtPairedRuntime below already uses for DynamicTerrainPairedGameTests -- compiled in
+// only when divJar is actually present, since these classes import
+// io.github.brooswitminecraft.div types that only resolve then.
 if (divJar != null) {
     sourceSets.main.java.srcDir('src/divIntegration/java')
     sourceSets.main.resources.srcDir('src/divIntegration/resources')
