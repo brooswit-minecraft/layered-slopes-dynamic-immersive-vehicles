@@ -111,3 +111,12 @@ bump: minor
   ran from that phase's own success path; any assertion or recursion-step failure would remove
   the vehicle but leave the guard's acquisition held forever. Tied to `TestContext#cleanup()`
   instead, which already runs from every one of this class's own exit paths.
+- Real CI failure AGAIN (run 44454272601, head ebed3ba): localPos now shows real drift (not a
+  dead stall) -- roughly (11.5,10.5) to (12.0,10.8) over the straight phase, then a small stable
+  loop around (12.0,10.8) for the rest of the turn -- but still never close enough to any
+  prepared cell, and still zero mutations across 3 consecutive real runs despite this vehicle
+  clearly moving. Added real, bounded diagnostic counters to `DivWheelContactConsumer`
+  (`topFaceContactsSeen`/`maxLateralSlipSeenMs`, reset per phase, logged at phase end) to answer
+  directly whether genuine lateral slip (not just curving motion, which can be clean/non-skidding
+  and produce near-zero real slip) is ever actually happening at the real wheel-contact level,
+  rather than continuing to infer it indirectly from chassis position/velocity.

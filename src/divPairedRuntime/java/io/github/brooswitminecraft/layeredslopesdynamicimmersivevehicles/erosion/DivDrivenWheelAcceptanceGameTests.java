@@ -276,6 +276,15 @@ public final class DivDrivenWheelAcceptanceGameTests {
             ctx.originX = originAbsolute.getX();
             ctx.originZ = originAbsolute.getZ();
             ctx.handle = spawnVehicle(level, spawnAbsolute);
+            // Diagnostic (MINECRAFT-510): real localPos telemetry across 3 real CI runs showed
+            // this vehicle only ever travels/circles within ~1-2 blocks of its own spawn point,
+            // never sweeping across the grid the way GroundSupportFixtureProbe's own real
+            // DRIVE_CHECK displacement does. Resetting DivWheelContactConsumer's own real
+            // diagnostic counters here (and logging them at phase end below) answers the next
+            // real question directly -- is genuine lateral slip (not just curving motion) ever
+            // actually happening at the real wheel-contact level at all -- rather than inferring
+            // it indirectly from chassis position/velocity again.
+            DivWheelContactConsumer.resetDiagnostics();
 
             helper.runAfterDelay(SETTLE_TICKS, () -> driveStraightFor(helper, ctx, STRAIGHT_DRIVE_TICKS, () -> driveWithSlipFor(helper, ctx, TURN_TICKS, () -> {
                 try {
@@ -293,7 +302,8 @@ public final class DivDrivenWheelAcceptanceGameTests {
                                     + "," + (ctx.handle.vehicle.position.z - ctx.originZ) + ")"
                                     + " position=" + ctx.handle.vehicle.position
                                     + " motion=" + ctx.handle.vehicle.motion
-                                    + " anyAppliedPair=" + anyAppliedPair);
+                                    + " anyAppliedPair=" + anyAppliedPair
+                                    + " " + DivWheelContactConsumer.diagnosticsSummary());
                     if (expectApplied) {
                         helper.assertTrue(anyAppliedPair, "expected at least one of the " + sourceCells.size()
                                 + " prepared dirt source cells to show the real conserved erosion mutation "

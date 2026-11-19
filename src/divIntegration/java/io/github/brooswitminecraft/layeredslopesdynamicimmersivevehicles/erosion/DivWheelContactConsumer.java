@@ -87,9 +87,35 @@ public final class DivWheelContactConsumer implements ErosionWheelContactIntegra
      */
     static void onWheelGroundContact(WheelGroundContactEvent event) {
         BlockPos pos = event.blockPos();
+        if (event.face() == Direction.UP) {
+            topFaceContactsSeen++;
+            maxLateralSlipSeenMs = Math.max(maxLateralSlipSeenMs, Math.abs(event.lateralSlipSpeedMetersPerSecond()));
+        }
         QUEUE.offer(new WheelContactQueue.QueuedContact(event.level().dimension(), pos.getX(), pos.getY(),
                 pos.getZ(), event.face() == Direction.UP, event.lateralSlipSpeedMetersPerSecond(),
                 event.supportedLoadKg(), event.serverTick()));
+    }
+
+    /**
+     * Test-only diagnostic counters, package-private and never read by production code: MINECRAFT-510
+     * review/diagnosis needed to see the REAL {@code lateralSlipSpeedMetersPerSecond} this class
+     * actually receives from real driven-wheel contacts, rather than inferring it indirectly from
+     * chassis position/velocity logging (which proved insufficient across several real CI runs --
+     * see {@code DivDrivenWheelAcceptanceGameTests}' own changelog history). Deliberately plain
+     * (non-atomic) fields: every real caller of {@link #onWheelGroundContact} already runs on the
+     * single server thread (the same real constraint {@code ErosionAttempt.attempt} itself
+     * asserts), so no concurrent-write hazard exists here.
+     */
+    private static long topFaceContactsSeen = 0;
+    private static double maxLateralSlipSeenMs = 0.0;
+
+    static void resetDiagnostics() {
+        topFaceContactsSeen = 0;
+        maxLateralSlipSeenMs = 0.0;
+    }
+
+    static String diagnosticsSummary() {
+        return "topFaceContactsSeen=" + topFaceContactsSeen + " maxLateralSlipSeenMs=" + maxLateralSlipSeenMs;
     }
 
     /**
