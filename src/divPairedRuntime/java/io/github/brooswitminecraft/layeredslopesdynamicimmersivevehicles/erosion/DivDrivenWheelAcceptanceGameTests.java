@@ -140,6 +140,13 @@ public final class DivDrivenWheelAcceptanceGameTests {
                                 var state = helper.getBlockState(cell);
                                 return state.hasProperty(LayeredBlock.LAYERS) && state.getValue(LayeredBlock.LAYERS) > 0;
                             });
+                            // Diagnostic evidence for CI iteration if this still fails: the real
+                            // vehicle's own final position/motion, so a future run can tell
+                            // "never moved/drove at all" apart from "drove but missed every cell."
+                            LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
+                                    "[DIV drivenWheelAcceptance] final vehicle position=" + handle.vehicle.position
+                                            + " motion=" + handle.vehicle.motion
+                                            + " anyCellApplied=" + anyApplied);
                             helper.assertTrue(anyApplied, "expected at least one of the " + sourceCells.size()
                                     + " prepared dirt source cells to show a real erosion mutation after "
                                     + "genuinely driving a real vehicle over this platform, but none did");

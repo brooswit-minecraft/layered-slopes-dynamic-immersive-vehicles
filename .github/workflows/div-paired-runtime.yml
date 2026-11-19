@@ -102,6 +102,27 @@ jobs:
             -PpairedRuntime=true \
             -Pneo_version=21.1.265
 
+      # Real CI failure on PR #19's first head (run 44447321872): the new driven-wheel GameTest
+      # ran clean (no exception) but found zero qualifying erosion mutations -- DIV's own
+      # GroundSupportFixtureProbe doc explains why: DIV's real per-vehicle Overrides (massKg/
+      # upperMassFraction, by packID:systemName) are read ONCE at mod init from this exact
+      # on-disk file, before any ServerTickEvent runs; an unregistered vehicle risks falling
+      # back to MTS's own native ground physics instead of DIV's real PhysicsBridge.Body, which
+      # never posts WheelGroundContactEvent at all. DIV's own diagnostics.yml CI seeds this same
+      # file, same format, for its own probe's vehicles (divtest:f0p5/f0p4) -- this registers
+      # the driven-wheel acceptance test's own vehicle (divtest:acceptance) the identical way.
+      - name: Seed this DIV test vehicle's massKg/upperMassFraction override for this disposable CI run only
+        working-directory: compat
+        run: |
+          mkdir -p run/config
+          cat > run/config/dynamic-immersive-vehicles.json <<'EOF'
+          {
+            "vehicles": {
+              "divtest:acceptance": {"massKg": 350.0, "upperMassFraction": 0.5}
+            }
+          }
+          EOF
+
       - name: Boot a real dedicated server with DIV, this mod, and every DIV-required dependency loaded
         working-directory: compat
         run: |
