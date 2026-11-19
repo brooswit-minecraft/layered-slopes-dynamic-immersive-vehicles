@@ -72,3 +72,21 @@ bump: minor
   activate for this vehicle, with the registered override applied
   (`chassisReceipt ... explicitOverrideEntry=true mass=350.0`).
 - `div-paired-runtime.yml`'s expected GameTest count bumped 24 -> 25 for this new test.
+- Real review/CI finding, this exact head (run 44451489283): the merged single-method test ran
+  clean (chassisReceipt/classify confirmed real `Body` activation, real ~5 m/s straight-line
+  speed) but still found zero conserved mutations. Examining the real logged position deltas
+  showed why: this vehicle's own TURN phase, like `GroundSupportFixtureProbe`'s own (a bounded
+  "low-speed steer", not a translating turn -- see that probe's own BRAKE/TURN comments),
+  decelerates from real speed to a near-stationary skid within only a handful of ticks of
+  rudder input, then stays essentially parked (net movement across the entire 150-tick phase
+  measured well under a block). Almost all of this test's real distance happens during the
+  short straight run, and the one real skid moment is a single (x,z) spot, not something swept
+  across the grid. That spot was directly between this chassis's own two nearest prepared grid
+  columns (x=8 and x=11) -- one block off either, and this chassis's own footprint (~0.85 wide)
+  cannot reach either from there. Fixed by spawning directly ON grid column x=11 instead of
+  between columns, so the real straight-line run (and the real skid at the end of it) stays
+  directly over that column's own prepared z=2,5,8,11,14,17 cells throughout. Also fixed a real
+  logging gap found during this diagnosis (the straight phase's own 20-tick length is never
+  divisible by 30, so it never actually logged) and tightened the turn phase's own cadence to
+  10 ticks (30 missed the exact moment speed collapsed) for better visibility on any future
+  failure.

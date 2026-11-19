@@ -221,7 +221,23 @@ public final class DivDrivenWheelAcceptanceGameTests {
             boolean expectApplied, Runnable onDone) {
         TestContext ctx = new TestContext();
         try {
-            BlockPos spawnAbsolute = helper.absolutePos(new BlockPos(10, 1, 10));
+            // Real CI failure on this exact head (run 44451489283): chassisReceipt/classify
+            // confirmed real Body activation, and the vehicle genuinely built real speed (~5
+            // m/s) during the straight phase, but anyAppliedPair stayed false. The real boot log
+            // showed WHY once the recorded position deltas were examined: as soon as rudder is
+            // applied, this vehicle decelerates to near-zero net motion within only a handful of
+            // ticks (matching GroundSupportFixtureProbe's own TURN phase, which is a bounded
+            // "low-speed steer" that plateaus at a near-stationary skid, not a translating turn
+            // -- see that probe's own BRAKE/TURN comments). So almost all of this phase's real
+            // distance happens during the straight run, and whatever slip genuinely occurs
+            // happens at essentially ONE (x,z) spot, not swept across the grid. Spawning at
+            // x=10 -- one block off BOTH of the nearest prepared grid columns (x=8 and x=11,
+            // see buildSourceGrid) -- put that one spot outside this chassis's own ~0.85-wide
+            // footprint of either column, so genuine slip never happened over a prepared cell.
+            // Spawning directly on grid column x=11 instead means every tick of real straight-
+            // line travel (and the real skid at the end of it) stays directly over that column's
+            // own z=2,5,8,11,14,17 cells.
+            BlockPos spawnAbsolute = helper.absolutePos(new BlockPos(11, 1, 10));
             ctx.handle = spawnVehicle(level, spawnAbsolute);
 
             helper.runAfterDelay(SETTLE_TICKS, () -> driveStraightFor(helper, ctx, STRAIGHT_DRIVE_TICKS, () -> driveWithSlipFor(helper, ctx, TURN_TICKS, () -> {
@@ -278,7 +294,11 @@ public final class DivDrivenWheelAcceptanceGameTests {
             forceEngineRunning(ctx.handle.engine);
             double speed = forwardSpeed(ctx.handle.vehicle);
             ctx.handle.vehicle.throttleVar.setTo(speed < LOW_SPEED_TARGET ? 1.0 : 0.0, false);
-            if (remainingTicks % 30 == 0) {
+            // STRAIGHT_DRIVE_TICKS is shorter than 30, so a plain "% 30 == 0" cadence (copied
+            // from driveWithSlipFor's own, much longer window) would never fire here -- a real
+            // gap found while diagnosing run 44451489283. Logging every tick's own start/end
+            // instead gives real visibility into this short phase without flooding the log.
+            if (remainingTicks == STRAIGHT_DRIVE_TICKS || remainingTicks == 1) {
                 LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
                         "[DIV drivenWheelAcceptance] phase=straight ticksRemaining=" + remainingTicks
                                 + " position=" + ctx.handle.vehicle.position
@@ -320,7 +340,10 @@ public final class DivDrivenWheelAcceptanceGameTests {
             double speed = forwardSpeed(ctx.handle.vehicle);
             ctx.handle.vehicle.throttleVar.setTo(speed < LOW_SPEED_TARGET ? 1.0 : 0.0, false);
             ctx.handle.vehicle.rudderInputVar.setTo(RUDDER_DEGREES, false);
-            if (remainingTicks % 30 == 0) {
+            // 10-tick cadence (not 30): a real CI run (44451489283) showed this phase's own
+            // speed collapsing from a real ~5 m/s to near-zero within the first ~30 ticks of
+            // rudder input -- a 30-tick cadence missed exactly when that happened.
+            if (remainingTicks % 10 == 0) {
                 LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
                         "[DIV drivenWheelAcceptance] phase=turn ticksRemaining=" + remainingTicks
                                 + " position=" + ctx.handle.vehicle.position
