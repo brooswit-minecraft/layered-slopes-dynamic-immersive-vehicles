@@ -155,3 +155,14 @@ bump: minor
   its real final `LAYERS` value on both source and east neighbor, to see the real end state
   directly rather than guessing whether the fix is a looser assertion or something else
   entirely.
+- Run 44456639596 (head 67897c2) returned the real end state: cell (11,11) shows source=11,
+  dest=5 (sums to 16 -- exactly 5 conservative one-sixteenth moves, per `SmoothRules.plan`'s own
+  real arithmetic, read directly from `layered-slope-grading`'s own source rather than guessed).
+  Cell (8,11) shows dest=5 but source still shows NO `LAYERS` property -- ambiguous from that
+  log alone, since `SmoothRules.plan` writes a depleted source back as literal AIR (not
+  distinguishable from "still plain dirt, never touched" by `hasProperty(LAYERS)` alone).
+  Widened the diagnostic to log each side's own real block id and trigger on ANY deviation from
+  the expected initial shape (source dirt, destination air), not just `LAYERS` presence, so
+  air-vs-dirt is never silently conflated again -- resolving directly, from the next real run,
+  whether this is genuine bidirectional diffusion between two now-eligible neighbors (both real
+  erosion, just not landing at the single-event snapshot) or something else.

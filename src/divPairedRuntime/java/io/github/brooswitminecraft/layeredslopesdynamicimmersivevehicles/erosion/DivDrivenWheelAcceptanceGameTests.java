@@ -360,11 +360,25 @@ public final class DivDrivenWheelAcceptanceGameTests {
                     for (BlockPos cell : sourceCells) {
                         var sourceState = helper.getBlockState(cell);
                         var destState = helper.getBlockState(cell.east());
-                        if (sourceState.hasProperty(LayeredBlock.LAYERS) || destState.hasProperty(LayeredBlock.LAYERS)) {
+                        // Review-worthy gap in the prior diagnostic: logging only
+                        // hasProperty(LAYERS)-present cells silently conflated "still plain
+                        // dirt, never touched" with "fully depleted back to air" -- both show
+                        // "n/a" for LAYERS, but Smoothing.smooth()'s own real source-depletion
+                        // rule (SmoothRules.plan: sourceAfter becomes null, written back as
+                        // literal AIR, once layers would drop to/below MIN_LAYERS) means those
+                        // are NOT the same real state. Logging each side's own real block id
+                        // too, and widening the trigger to ANY deviation from the expected
+                        // initial shape (source dirt, destination air), not just LAYERS
+                        // presence, so air-vs-dirt is never silently conflated again.
+                        boolean sourceIsStillPlainDirt = sourceState.is(net.minecraft.world.level.block.Blocks.DIRT);
+                        boolean destIsStillAir = destState.isAir();
+                        if (!sourceIsStillPlainDirt || !destIsStillAir) {
                             LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
                                     "[DIV drivenWheelAcceptance] changed cell=" + cell
+                                            + " sourceBlock=" + sourceState.getBlock()
                                             + " sourceLayers=" + (sourceState.hasProperty(LayeredBlock.LAYERS)
                                                     ? sourceState.getValue(LayeredBlock.LAYERS) : "n/a")
+                                            + " destBlock=" + destState.getBlock()
                                             + " destLayers=" + (destState.hasProperty(LayeredBlock.LAYERS)
                                                     ? destState.getValue(LayeredBlock.LAYERS) : "n/a"));
                         }
