@@ -11,6 +11,7 @@ import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion
 import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionWheelContactIntegration;
 
 import java.util.Iterator;
+import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 
 import net.neoforged.api.distmarker.Dist;
