@@ -137,3 +137,11 @@ bump: minor
   register/unregister-in-cleanup pattern `ErosionAttemptGameTests`' own `denyAtSource`/
   `swapSourceOnBreakEvent` listeners already use), scoped to this test's own dimension and grid,
   logging face/slip/load/tick for every real event whose own position matches a prepared cell.
+- Real review finding, Jira comment 55310: that listener's own first version converted each
+  event's absolute position down to local by subtracting origin X/Z, but left
+  `event.blockPos().getY()` untouched -- absolute, while `sourceCells`' own Y is template-local
+  1, so the comparison could only ever match if this structure's real world origin happened to
+  have Y=0 (confirmed by the next real run: it logged zero correlated contacts despite real,
+  above-threshold slip genuinely happening nearby). Compares against each cell's own real
+  absolute position (`helper.absolutePos`) instead, avoiding manual per-axis origin math
+  entirely and incidentally also robust to structure rotation.

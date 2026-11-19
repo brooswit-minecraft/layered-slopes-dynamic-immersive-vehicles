@@ -306,23 +306,32 @@ public final class DivDrivenWheelAcceptanceGameTests {
             // swapSourceOnBreakEvent listeners are, and unregistered from cleanup() below --
             // correlates all of that per real event, scoped to this test's own dimension and
             // grid, answering that directly instead.
-            int originBlockXForListener = (int) ctx.originX;
-            int originBlockZForListener = (int) ctx.originZ;
+            // Real review finding, Jira comment 55310: the first version of this listener
+            // subtracted origin X/Z to convert the event's own ABSOLUTE position down to local,
+            // but left Y untouched -- event.blockPos().getY() is absolute, while sourceCells'
+            // own Y is template-local 1, so that comparison could only ever match if this
+            // structure's own real world origin happened to have Y=0. Comparing against each
+            // cell's own real ABSOLUTE position (via helper.absolutePos, the same conversion
+            // every other real position in this class already goes through) instead avoids
+            // manual per-axis origin math entirely -- and is robust to structure rotation too,
+            // not just this one axis's own off-by-Y bug.
+            Set<BlockPos> absoluteSourceCells = sourceCells.stream()
+                    .map(helper::absolutePos)
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
             Object correlationListener = new Object() {
                 @net.neoforged.bus.api.SubscribeEvent
                 public void onContact(WheelGroundContactEvent event) {
                     if (!event.level().dimension().equals(level.dimension())) {
                         return;
                     }
-                    BlockPos local = new BlockPos(event.blockPos().getX() - originBlockXForListener,
-                            event.blockPos().getY(), event.blockPos().getZ() - originBlockZForListener);
-                    if (!sourceCells.contains(local)) {
+                    if (!absoluteSourceCells.contains(event.blockPos())) {
                         return;
                     }
                     LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
-                            "[DIV drivenWheelAcceptance] correlated contact on prepared cell local=" + local
-                                    + " face=" + event.face() + " slip=" + event.lateralSlipSpeedMetersPerSecond()
-                                    + " load=" + event.supportedLoadKg() + " tick=" + event.serverTick());
+                            "[DIV drivenWheelAcceptance] correlated contact on prepared cell absolute="
+                                    + event.blockPos() + " face=" + event.face() + " slip="
+                                    + event.lateralSlipSpeedMetersPerSecond() + " load=" + event.supportedLoadKg()
+                                    + " tick=" + event.serverTick());
                 }
             };
             NeoForge.EVENT_BUS.register(correlationListener);
