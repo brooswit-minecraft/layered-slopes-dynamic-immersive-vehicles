@@ -55,3 +55,13 @@ bump: minor
   exact package, and for the same reason: this project's plain `./gradlew test` has no NeoForge/
   FML classpath at all, so a test referencing a real Minecraft type cannot compile under it.
   `DivWheelContactConsumer` converts at the one real boundary that still needs the real types.
+- Added `DivWheelContactConsumerGameTests` (review finding: the queue/drain unit tests above
+  never actually exercise `DivWheelContactConsumer`'s own listener wiring, and the paired-runtime
+  boot only compiles/registers it against an empty server) -- posts a real `WheelGroundContactEvent`
+  onto the real `NeoForge.EVENT_BUS` and lets the real, `ServiceLoader`-registered
+  `DivWheelContactConsumer` handle it end to end, asserting that a top-face contact drains into
+  exactly one real `ErosionAttempt.attempt` application (`layered_dirt` 15/1 split) and that a
+  side-face contact reaches no attempt at all. Only runs under `div-paired-runtime.yml`'s real
+  `runGameTestServer` boot, which now expects 23 GameTests (21 default + these 2) via
+  `check_gametest_count.py`'s explicit override argument, mirroring `dt-paired-runtime.yml`'s own
+  established convention for its paired extra GameTest.
