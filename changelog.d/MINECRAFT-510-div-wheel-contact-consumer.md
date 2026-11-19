@@ -65,3 +65,17 @@ bump: minor
   `runGameTestServer` boot, which now expects 23 GameTests (21 default + these 2) via
   `check_gametest_count.py`'s explicit override argument, mirroring `dt-paired-runtime.yml`'s own
   established convention for its paired extra GameTest.
+- Fixed three real defects a review caught in that same `DivWheelContactConsumerGameTests` before
+  approval: (1) both tests forced the process-wide `ErosionModConfig.OVERRIDES` singleton to an
+  enabled guaranteed-chance snapshot and never restored it -- real shared static state also read
+  by `ErosionModConfigGameTests` and `ErosionClientSyncTestCommand`, so leaving it mutated would
+  have made the whole 23-test paired run order/concurrency-dependent; now captured and restored
+  on every synchronous and delayed-assertion path (success or failure); (2) the test's
+  `REFERENCE_LOAD_KG = 300` was passed directly as `WheelGroundContactEvent.createIfValid`'s
+  `normalForce` argument, which divides by gravity to compute `supportedLoadKg` -- so the test
+  was actually publishing ~30.6 kg, not the documented 300 kg reference load; fixed by passing
+  `REFERENCE_LOAD_KG * GRAVITY`; (3) the top-face test only asserted final state after a 3-tick
+  delay, which did not itself prove the event listener performs no synchronous mutation before
+  the safe `ServerTickEvent.Post` drain -- added an immediate assertion right after
+  `NeoForge.EVENT_BUS.post(event)` that the source is still unchanged, ahead of the existing
+  delayed assertion that it was eventually mutated.

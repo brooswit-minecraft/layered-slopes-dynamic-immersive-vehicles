@@ -35,10 +35,16 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
  * ErosionAttemptGameTests#GUARANTEED_CHANCE_CONFIG} directly (the real, global config singleton
  * {@link DivWheelContactConsumer} itself reads -- the only consumer in this codebase that reads
  * it rather than taking an explicit config parameter) rather than relying on a pre-seeded config
- * file. No other existing test in this codebase reads {@code OVERRIDES} at all (every one of
- * them passes an explicit {@code ErosionConfig} straight to {@code ErosionAttempt.attempt}), so
- * this is a safe, isolated first use of that singleton from a {@code GameTest}, not a risk to
- * any other test's own behavior.
+ * file. {@code OVERRIDES} is real, process-wide, shared-static state -- {@code
+ * ErosionModConfigGameTests} and {@code ErosionClientSyncTestCommand} also read it, and {@code
+ * ErosionModConfigGameTests}' own live-reload test documents the exact failure-safe-restore
+ * contract this class must honor too (review finding M55554611-followup, Jira comment 55269 /
+ * GitHub comment 6995553666: an earlier revision of this class incorrectly claimed to be the
+ * only reader and left this singleton mutated after both tests, which would have made the whole
+ * paired run's 23-test evidence order/concurrency-dependent). Each test below captures the prior
+ * snapshot and restores it through both its own synchronous setup ({@code try/catch}) and its
+ * delayed assertion ({@code finally}), so {@code OVERRIDES} is left exactly as found regardless
+ * of success or failure.
  */
 @GameTestHolder(LayeredSlopesDynamicImmersiveVehiclesMod.MODID)
 @PrefixGameTestTemplate(false)
@@ -56,61 +62,105 @@ public final class DivWheelContactConsumerGameTests {
      * position (top face) -> the real registered {@link DivWheelContactConsumer} snapshot-
      * enqueues it -> the next real {@code ServerTickEvent.Post} drains it -> exactly one real
      * {@code ErosionAttempt.attempt} call actually mutates the world. Waits 3 ticks (comfortably
-     * past the 1 tick actually required) before asserting, so this is never a race against the
-     * real drain's own timing.
+     * past the 1 tick actually required) before asserting the eventual mutation, so that
+     * assertion is never a race against the real drain's own timing.
+     *
+     * <p>Review findings M55554611-followup (PR #17 @ 4c5a11c, Jira comment 55269 / GitHub
+     * comment 6995553666) required three corrections, all applied here: (1) an immediate
+     * assertion right after {@code NeoForge.EVENT_BUS.post(event)} that the source is still
+     * unchanged -- proof the event listener itself performs no synchronous mutation, only the
+     * later {@code ServerTickEvent.Post} drain does; (2) {@code REFERENCE_LOAD_KG * GRAVITY} as
+     * the {@code normalForce} argument, since {@link WheelGroundContactEvent#createIfValid}
+     * divides that argument by gravity to compute {@code supportedLoadKg} -- passing the raw kg
+     * value there published roughly a tenth of the intended reference load; (3) {@link
+     * ErosionModConfig#OVERRIDES} restored to its prior snapshot on every path (the synchronous
+     * setup via an outer {@code try/catch}, the delayed assertion itself via an inner {@code
+     * finally}) -- it is real, process-wide, shared-static state also read by {@code
+     * ErosionModConfigGameTests} and {@code ErosionClientSyncTestCommand}, so leaving it forced
+     * to {@code GUARANTEED_CHANCE_CONFIG} would make the whole 23-test paired run order/
+     * concurrency-dependent.
      */
     @GameTest(template = "flat_platform")
     public static void aRealPostedTopFaceEventFlowsThroughTheRealWiringToExactlyOneApplication(
             GameTestHelper helper) {
-        ErosionModConfig.OVERRIDES.reload(ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG);
-        BlockPos pos = new BlockPos(1, 2, 1);
-        ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, pos);
-        ServerLevel level = (ServerLevel) helper.getLevel();
-        BlockPos sourcePos = helper.absolutePos(pos);
-        BlockPos destPos = helper.absolutePos(pos.relative(Direction.EAST));
+        ErosionConfig priorConfig = ErosionModConfig.OVERRIDES.current();
+        try {
+            ErosionModConfig.OVERRIDES.reload(ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG);
+            BlockPos pos = new BlockPos(1, 2, 1);
+            ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, pos);
+            ServerLevel level = (ServerLevel) helper.getLevel();
+            BlockPos sourcePos = helper.absolutePos(pos);
+            BlockPos destPos = helper.absolutePos(pos.relative(Direction.EAST));
 
-        var event = WheelGroundContactEvent.createIfValid(level, sourcePos, Direction.UP,
-                SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, GRAVITY, level.getServer().getTickCount());
-        helper.assertTrue(event != null, "createIfValid must accept this deliberately valid payload");
-        NeoForge.EVENT_BUS.post(event);
+            var event = WheelGroundContactEvent.createIfValid(level, sourcePos, Direction.UP,
+                    SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG * GRAVITY, GRAVITY, level.getServer().getTickCount());
+            helper.assertTrue(event != null, "createIfValid must accept this deliberately valid payload");
+            NeoForge.EVENT_BUS.post(event);
 
-        helper.runAfterDelay(3, () -> {
-            var sourceState = helper.getBlockState(pos);
-            var destState = helper.getBlockState(pos.relative(Direction.EAST));
-            helper.assertTrue(sourceState.hasProperty(LayeredBlock.LAYERS)
-                            && sourceState.getValue(LayeredBlock.LAYERS) == 15,
-                    "expected source layered_dirt/15 after the real wiring drained and applied, got " + sourceState);
-            helper.assertTrue(destState.hasProperty(LayeredBlock.LAYERS)
-                            && destState.getValue(LayeredBlock.LAYERS) == 1,
-                    "expected destination layered_dirt/1 after the real wiring drained and applied, got " + destState);
-            helper.succeed();
-        });
+            helper.assertTrue(helper.getBlockState(pos).getBlock() == Blocks.DIRT,
+                    "the event listener itself must never mutate synchronously -- expected the source to "
+                            + "still be plain dirt immediately after NeoForge.EVENT_BUS.post(event) returned, "
+                            + "before any ServerTickEvent.Post drain has run, got " + helper.getBlockState(pos));
+
+            helper.runAfterDelay(3, () -> {
+                try {
+                    var sourceState = helper.getBlockState(pos);
+                    var destState = helper.getBlockState(pos.relative(Direction.EAST));
+                    helper.assertTrue(sourceState.hasProperty(LayeredBlock.LAYERS)
+                                    && sourceState.getValue(LayeredBlock.LAYERS) == 15,
+                            "expected source layered_dirt/15 after the real wiring drained and applied, got "
+                                    + sourceState);
+                    helper.assertTrue(destState.hasProperty(LayeredBlock.LAYERS)
+                                    && destState.getValue(LayeredBlock.LAYERS) == 1,
+                            "expected destination layered_dirt/1 after the real wiring drained and applied, got "
+                                    + destState);
+                    helper.succeed();
+                } finally {
+                    ErosionModConfig.OVERRIDES.reload(priorConfig);
+                }
+            });
+        } catch (RuntimeException | Error e) {
+            ErosionModConfig.OVERRIDES.reload(priorConfig);
+            throw e;
+        }
     }
 
     /**
      * Review finding ("verify whether ignoring the preserved contact face is semantically
      * correct"), proven through the REAL wiring this time (unit coverage already exists in
      * {@link WheelContactQueueTest}): a real event naming a SIDE face must reach no attempt at
-     * all -- the source block must still be plain dirt after the real drain runs.
+     * all -- the source block must still be plain dirt after the real drain runs. Same {@code
+     * REFERENCE_LOAD_KG * GRAVITY} unit correction and {@code OVERRIDES} restore-on-every-path
+     * fix as the top-face test above; see that method's own doc for why.
      */
     @GameTest(template = "flat_platform")
     public static void aRealPostedSideFaceEventNeverReachesAnAttemptThroughTheRealWiring(GameTestHelper helper) {
-        ErosionModConfig.OVERRIDES.reload(ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG);
-        BlockPos pos = new BlockPos(1, 2, 4);
-        ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, pos);
-        ServerLevel level = (ServerLevel) helper.getLevel();
-        BlockPos sourcePos = helper.absolutePos(pos);
+        ErosionConfig priorConfig = ErosionModConfig.OVERRIDES.current();
+        try {
+            ErosionModConfig.OVERRIDES.reload(ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG);
+            BlockPos pos = new BlockPos(1, 2, 4);
+            ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, pos);
+            ServerLevel level = (ServerLevel) helper.getLevel();
+            BlockPos sourcePos = helper.absolutePos(pos);
 
-        var event = WheelGroundContactEvent.createIfValid(level, sourcePos, Direction.NORTH,
-                SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG, GRAVITY, level.getServer().getTickCount());
-        helper.assertTrue(event != null, "createIfValid must accept this deliberately valid (side-face) payload");
-        NeoForge.EVENT_BUS.post(event);
+            var event = WheelGroundContactEvent.createIfValid(level, sourcePos, Direction.NORTH,
+                    SLIP_ABOVE_THRESHOLD_MS, REFERENCE_LOAD_KG * GRAVITY, GRAVITY, level.getServer().getTickCount());
+            helper.assertTrue(event != null, "createIfValid must accept this deliberately valid (side-face) payload");
+            NeoForge.EVENT_BUS.post(event);
 
-        helper.runAfterDelay(3, () -> {
-            helper.assertTrue(helper.getBlockState(pos).getBlock() == Blocks.DIRT,
-                    "a side-face contact must never reach an attempt through the real wiring -- the source "
-                            + "must still be plain dirt, got " + helper.getBlockState(pos));
-            helper.succeed();
-        });
+            helper.runAfterDelay(3, () -> {
+                try {
+                    helper.assertTrue(helper.getBlockState(pos).getBlock() == Blocks.DIRT,
+                            "a side-face contact must never reach an attempt through the real wiring -- the "
+                                    + "source must still be plain dirt, got " + helper.getBlockState(pos));
+                    helper.succeed();
+                } finally {
+                    ErosionModConfig.OVERRIDES.reload(priorConfig);
+                }
+            });
+        } catch (RuntimeException | Error e) {
+            ErosionModConfig.OVERRIDES.reload(priorConfig);
+            throw e;
+        }
     }
 }
