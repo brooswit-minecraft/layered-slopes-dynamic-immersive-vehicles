@@ -34,14 +34,21 @@ bump: minor
   `LayeredSlopesDynamicImmersiveVehiclesMod`'s own registration loop to catch that per-provider
   and skip it (logging a warning) rather than crashing mod construction over a different mod's
   optional dependency being missing.
-- Added `missing-div-isolation-smoke` (`pinned-jar-smoke-acceptance.yml`), proving the fix above
-  against the real shipped artifact rather than "a separately rebuilt DIV-free variant" (the
-  same review finding's exact words): builds this mod's jar via the identical recipe `ci.yml`
-  uses (DIV built fresh from the pinned source commit, `-PdivLocalJar` pointed at it, so the
-  provider metadata really is baked in), verifies that directly by inspecting the built jar's
-  own contents, then boots a real dedicated server with that jar while DIV's own jar is
-  deliberately never installed -- asserting a clean "Done (" boot, 0 registered wheel-contact
-  integrations, DIV's own mod id absent from the Mod List, and a graceful shutdown.
+- Added `missing-div-isolation-smoke` and `with-div-isolation-smoke` to `ci.yml` itself (not a
+  separate opt-in workflow), proving the fix above against the real shipped artifact. An earlier
+  revision put these in `pinned-jar-smoke-acceptance.yml`, independently rebuilding this mod's
+  jar "by the same recipe" ci.yml uses -- real review follow-through (direction comment 55289)
+  correctly flagged that as still only proving same-recipe behavior, not that the actual
+  uploaded deliverable bytes were tested (this ticket already proved jar builds aren't
+  byte-reproducible across separate builds). Both jobs now `needs: build`, download the EXACT
+  artifact that job uploaded via `actions/download-artifact`, and verify its sha256 against a
+  value `build` recorded as its own job output before ever booting it -- never an independent
+  rebuild. `missing-div-isolation-smoke` boots that exact jar with DIV's own jar deliberately
+  never installed (0 registered integrations expected); `with-div-isolation-smoke` boots the
+  SAME exact jar with DIV and its own real required dependencies (mts/Sable/Sable-Companion, via
+  `build.gradle`'s existing `copyPairedRuntimeJars` task) genuinely present (exactly 1 registered
+  integration expected) -- "test that same jar both with and without DIV," per that review
+  finding's own words.
 - `ci.yml`'s separate "Run GameTests" step deliberately stays DIV-free: booting a real dedicated
   server with DIV present also loads DIV itself as a mod, which pulls in DIV's own `neo_version`
   floor and its own `mts`/Sable/Sable-Companion dependencies -- already proven out by
