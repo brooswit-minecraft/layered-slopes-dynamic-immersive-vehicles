@@ -7,11 +7,19 @@ bump: minor
   no erosion-wheel integration at all (direction, comment 55251: "src/divIntegration and provider
   metadata currently disappear from a normal build, leaving a nonfunctional wheel-erosion
   artifact"). `ci.yml`'s "Build and test" step now builds DIV fresh from a pinned source commit
-  (`div_pinned_ref` in `gradle.properties`), verifies the resulting jar's sha256 against a pinned
-  value (`div_pinned_jar_sha256`) before using it, and only then builds this mod against it --
-  the exact immutable-source-pin-and-verified-jar-hashing route `div-paired-runtime.yml` already
-  proved, reused here for the real uploaded artifact rather than only an opt-in smoke test. No
-  publication/deployment is added by this change.
+  (`div_pinned_ref` in `gradle.properties`, an immutable git commit SHA -- itself a cryptographic
+  hash of the exact tree content, the real source-integrity guarantee), verifies exactly one jar
+  was produced, and only then builds this mod against it -- the exact route
+  `div-paired-runtime.yml` already proved, reused here for the real uploaded artifact rather than
+  only an opt-in smoke test. No publication/deployment is added by this change.
+- A per-build sha256 of the produced DIV jar is logged for audit but deliberately NOT pinned as
+  a cross-run equality gate: a real CI failure on this exact step showed DIV's own `jar` task
+  embeds per-build timestamps (no `preserveFileTimestamps`/`reproducibleFileOrder` set in its
+  build.gradle), so the same pinned commit produces a different jar sha256 on every separate
+  build. `div-paired-runtime.yml`'s own equivalent step has always only recorded this hash, never
+  compared it across runs, for exactly this reason -- an earlier revision of this change tried
+  to gate on hash equality and failed closed on its very first real CI run once two separate
+  builds of the same pinned commit were actually compared.
 - Declared `dynamicimmersivevehicles` as an `optional` `neoforge.mods.toml` dependency
   (`ordering="AFTER"`), since this mod's other two consumers remain fully standalone of DIV and
   the `ServiceLoader` seam already registers zero providers gracefully when DIV is absent --

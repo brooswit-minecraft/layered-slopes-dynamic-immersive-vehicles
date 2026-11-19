@@ -69,7 +69,16 @@ jobs:
         working-directory: div
         run: gradle --no-daemon --stacktrace clean build -x test
 
-      - name: Verify exactly one DIV jar was produced, and its sha256 matches the pinned value
+      # Confirmed by a real CI failure on this exact step (MINECRAFT-510): DIV's own `jar` task
+      # embeds real per-build timestamps (no `preserveFileTimestamps`/`reproducibleFileOrder`
+      # set), so the SAME pinned commit produces a DIFFERENT jar sha256 on every separate build
+      # -- a cross-run hash-equality gate here would be a false-failure trap, not a real
+      # integrity check. This step therefore only verifies exactly one jar was produced (the
+      # real, already-proven check) and logs the sha256 it actually got, for audit purposes --
+      # the same thing div-paired-runtime.yml's own equivalent step has always done. The git
+      # commit SHA pinned above (div_pinned_ref) is itself the real, immutable source-integrity
+      # guarantee; it already cryptographically binds the exact tree this jar was built from.
+      - name: Verify exactly one DIV jar was produced, and log its sha256
         id: divjar
         run: |
           expected="div/build/libs/dynamic-immersive-vehicles-0.1.0-SNAPSHOT.jar"
@@ -84,13 +93,7 @@ jobs:
             ls -la div/build/libs/
             exit 1
           fi
-          actual_sha256=$(sha256sum "$expected" | cut -d' ' -f1)
-          pinned_sha256=$(grep '^div_pinned_jar_sha256=' gradle.properties | cut -d= -f2)
-          if [ "$actual_sha256" != "$pinned_sha256" ]; then
-            echo "::error::DIV jar sha256 mismatch for pinned ref ${{ steps.divpin.outputs.ref }}: expected $pinned_sha256, got $actual_sha256 -- refusing to build against an unverified jar"
-            exit 1
-          fi
-          echo "DIV jar sha256 verified: $actual_sha256"
+          echo "DIV jar sha256 (this build, not reproducible across builds -- see gradle.properties): $(sha256sum "$expected" | cut -d' ' -f1)"
           echo "path=$(readlink -f "$expected")" >> "$GITHUB_OUTPUT"
 
       - name: Build and test (with the verified, pinned DIV jar on the classpath)

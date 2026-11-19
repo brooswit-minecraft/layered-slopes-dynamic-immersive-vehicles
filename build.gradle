@@ -188,12 +188,12 @@ if (incompatibleVersionDependency == "layeredslopegrading") {
 // is for layered-slopes/layered-slope-grading above -- `-PdivLocalJar=<path>` is this build's
 // only way to put a DIV jar on the classpath at all. That flag is NOT normally hand-supplied by
 // a contributor, though: ci.yml's own "Build and test" step supplies it automatically, built
-// fresh from gradle.properties' pinned div_pinned_ref and verified against div_pinned_jar_sha256
-// first (direction, comment 55251: "an immutable source-pinned dependency build and verified
-// jar hashing, already exercised by paired CI" -- the exact route div-paired-runtime.yml already
-// proved, reused here for the real uploaded build artifact rather than just an opt-in smoke
-// test). A plain local `./gradlew build` with no flags still omits DIV entirely -- this is a
-// property of what the invoker chooses to pass, not a structural restriction in this file.
+// fresh from gradle.properties' pinned div_pinned_ref (an immutable git commit SHA -- direction,
+// comment 55251: "an immutable source-pinned dependency build and verified jar hashing, already
+// exercised by paired CI" -- the exact route div-paired-runtime.yml already proved, reused here
+// for the real uploaded build artifact rather than just an opt-in smoke test). A plain local
+// `./gradlew build` with no flags still omits DIV entirely -- this is a property of what the
+// invoker chooses to pass, not a structural restriction in this file.
 def localDivJar = findProperty("divLocalJar")
 def divJar = localDivJar ? layout.projectDirectory.file(localDivJar as String) : null
 

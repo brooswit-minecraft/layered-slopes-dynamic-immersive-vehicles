@@ -50,9 +50,9 @@ description='''Dedicated traction-loss erosion compatibility mod between Dynamic
 # that registers zero providers (a graceful no-op, not an error) when DIV is absent -- so this
 # entry only tells NeoForge "load AFTER DIV if DIV happens to be present," never "fail to load
 # without it." No real DIV release version exists yet to pin a versionRange against (see
-# build.gradle/gradle.properties' div_pinned_ref/div_pinned_jar_sha256 for how this mod's own
-# build instead pins DIV by source commit + verified jar hash); versionRange is left maximally
-# permissive until DIV ships one.
+# build.gradle/gradle.properties' div_pinned_ref for how this mod's own build instead pins DIV
+# by source commit, an immutable git SHA); versionRange is left maximally permissive until DIV
+# ships one.
 [[dependencies.${mod_id}]]
     modId="dynamicimmersivevehicles"
     type="optional"
