@@ -60,11 +60,12 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
  * replaces that probe's own hand-rolled per-tick phase state machine, since GameTest's own tick
  * loop is what repeatedly re-enters this test, not a loop this class writes itself), drives over
  * a real carved platform seeded with many {@link ErosionAttemptGameTests#placeSourceWithOneValidEastNeighbor}
- * cells instead of DIV's own flat characterization platform, applies throttle AND a steady
- * rudder pulse together (rather than sequential DRIVE/TURN phases) to generate real lateral slip
- * while still covering ground, and removes the vehicle via the real {@code
- * AEntityA_Base#remove()} method at the end (that probe never cleans up, since it runs once per
- * disposable CI-world server lifetime; a GameTest world is reused within a batch, so this does).
+ * cells instead of DIV's own flat characterization platform (same sequential straight-drive-then-
+ * turn phase order as that probe, confirmed necessary by a real CI run -- see {@link
+ * #driveStraightFor}/{@link #driveWithSlipFor}'s own docs), and removes the vehicle via the real
+ * {@code AEntityA_Base#remove()} method at the end (that probe never cleans up, since it runs
+ * once per disposable CI-world server lifetime; a GameTest world is reused within a batch, so
+ * this does).
  *
  * <p>{@link ErosionModConfig#OVERRIDES} is forced to {@link
  * ErosionAttemptGameTests#GUARANTEED_CHANCE_CONFIG} for the duration (same real, process-wide
@@ -96,7 +97,14 @@ public final class DivDrivenWheelAcceptanceGameTests {
     private static final Point3D WHEEL_RR = new Point3D(-0.375, 0.125, -0.0625);
 
     private static final int SETTLE_TICKS = 30;
-    private static final int DRIVE_TICKS = 200;
+    // Review-worthy finding from a real CI run (direction comment 55301): applying throttle AND
+    // a steady rudder pulse together from a near-standstill produced a vehicle that reached real
+    // speed briefly, then stalled to near-zero motion for the rest of the window -- unlike
+    // GroundSupportFixtureProbe's own proven sequence, which NEVER combines rudder with throttle
+    // from a standing start: it drives STRAIGHT first (building real, clean speed), only THEN
+    // adds rudder while already cruising. Split into the same two sequential phases here.
+    private static final int STRAIGHT_DRIVE_TICKS = 100;
+    private static final int TURN_TICKS = 150;
     private static final int GRID_STEP = 3; // footprint radius 1 + this margin keeps adjacent cells' own neighbor requirements from overlapping
 
     /**
@@ -185,7 +193,7 @@ public final class DivDrivenWheelAcceptanceGameTests {
             BlockPos spawnAbsolute = helper.absolutePos(spawnRelative);
             ctx.handle = spawnVehicle(level, spawnAbsolute);
 
-            helper.runAfterDelay(SETTLE_TICKS, () -> driveWithSlipFor(helper, ctx, DRIVE_TICKS, () -> {
+            helper.runAfterDelay(SETTLE_TICKS, () -> driveStraightFor(helper, ctx, STRAIGHT_DRIVE_TICKS, () -> driveWithSlipFor(helper, ctx, TURN_TICKS, () -> {
                 try {
                     ctx.handle.vehicle.throttleVar.setTo(0.0, false);
                     ctx.handle.vehicle.rudderInputVar.setTo(0.0, false);
@@ -216,7 +224,7 @@ public final class DivDrivenWheelAcceptanceGameTests {
                 } finally {
                     ctx.cleanup();
                 }
-            }));
+            })));
         } catch (RuntimeException | Error e) {
             ctx.cleanup();
             throw e;
@@ -224,18 +232,52 @@ public final class DivDrivenWheelAcceptanceGameTests {
     }
 
     /**
-     * Recreates {@code GroundSupportFixtureProbe}'s own per-tick throttle/engine/rudder
-     * re-assertion (that probe's own doc: {@code PartEngine}'s per-tick update logic can
-     * plausibly reset {@code running}/{@code currentGearVar} without the caller ever knowing) as
-     * a GameTest-native recursive {@code runAfterDelay(1, ...)} chain, since GameTest's own tick
-     * loop -- not a loop this method writes itself -- is what re-enters this test. Applies
-     * throttle (closed-loop bang-bang toward {@link #LOW_SPEED_TARGET}, same as that probe) AND
-     * a steady rudder pulse together throughout, rather than sequential phases, so the vehicle
-     * both covers real ground and genuinely slips sideways for the whole window. Each recursive
+     * First phase, matching {@code GroundSupportFixtureProbe}'s own {@code drive()}: straight
+     * (no rudder) closed-loop bang-bang throttle toward {@link #LOW_SPEED_TARGET}, building real,
+     * clean forward speed before any steering input is ever introduced. Same per-tick
+     * engine/throttle re-assertion and per-step exception guard as {@link #driveWithSlipFor}
+     * below; see that method's own doc for why both are needed.
+     */
+    private static void driveStraightFor(GameTestHelper helper, TestContext ctx, int remainingTicks, Runnable onDone) {
+        try {
+            if (remainingTicks <= 0) {
+                onDone.run();
+                return;
+            }
+            forceEngineRunning(ctx.handle.engine);
+            double speed = forwardSpeed(ctx.handle.vehicle);
+            ctx.handle.vehicle.throttleVar.setTo(speed < LOW_SPEED_TARGET ? 1.0 : 0.0, false);
+            if (remainingTicks % 30 == 0) {
+                LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
+                        "[DIV drivenWheelAcceptance] phase=straight ticksRemaining=" + remainingTicks
+                                + " position=" + ctx.handle.vehicle.position
+                                + " motion=" + ctx.handle.vehicle.motion + " forwardSpeed=" + speed);
+            }
+            helper.runAfterDelay(1, () -> driveStraightFor(helper, ctx, remainingTicks - 1, onDone));
+        } catch (RuntimeException | Error e) {
+            ctx.cleanup();
+            throw e;
+        }
+    }
+
+    /**
+     * Second phase, matching {@code GroundSupportFixtureProbe}'s own {@code turn()}: a real,
+     * deliberate review-worthy finding from a prior CI run (direction comment 55301) is why this
+     * is a SEPARATE phase from {@link #driveStraightFor} above, not combined from the start --
+     * applying rudder together with throttle from a near-standstill produced a vehicle that
+     * reached real speed briefly, then stalled to near-zero motion for the rest of the window.
+     * Only once already cruising (after {@link #driveStraightFor}) does this add a steady,
+     * nonzero rudder pulse, continuing the same closed-loop throttle, to generate real lateral
+     * slip while the vehicle is already moving cleanly -- the exact same ordering that probe's
+     * own real, CI-proven TURN phase uses. Recreates that probe's own per-tick throttle/engine/
+     * rudder re-assertion (its own doc: {@code PartEngine}'s per-tick update logic can plausibly
+     * reset {@code running}/{@code currentGearVar} without the caller ever knowing) as a
+     * GameTest-native recursive {@code runAfterDelay(1, ...)} chain, since GameTest's own tick
+     * loop -- not a loop this method writes itself -- is what re-enters this test. Each recursive
      * step is independently guarded (review finding, direction comment 55300): an exception here
      * triggers {@link TestContext#cleanup()} before propagating, not only the final step's own
      * {@code finally}, since GameTest re-enters this chain on its own schedule, not through the
-     * one try/catch the scenario method itself wraps around the FIRST {@code runAfterDelay} call.
+     * one try/catch the scenario method itself wraps around the first {@code runAfterDelay} call.
      */
     private static void driveWithSlipFor(GameTestHelper helper, TestContext ctx, int remainingTicks, Runnable onDone) {
         try {
@@ -249,7 +291,7 @@ public final class DivDrivenWheelAcceptanceGameTests {
             ctx.handle.vehicle.rudderInputVar.setTo(RUDDER_DEGREES, false);
             if (remainingTicks % 30 == 0) {
                 LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
-                        "[DIV drivenWheelAcceptance] ticksRemaining=" + remainingTicks
+                        "[DIV drivenWheelAcceptance] phase=turn ticksRemaining=" + remainingTicks
                                 + " position=" + ctx.handle.vehicle.position
                                 + " motion=" + ctx.handle.vehicle.motion + " forwardSpeed=" + speed);
             }
