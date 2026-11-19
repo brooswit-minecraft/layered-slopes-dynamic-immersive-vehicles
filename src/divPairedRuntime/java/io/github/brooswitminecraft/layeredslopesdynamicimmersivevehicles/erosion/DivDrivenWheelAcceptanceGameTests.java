@@ -347,6 +347,28 @@ public final class DivDrivenWheelAcceptanceGameTests {
                         return sourceState.hasProperty(LayeredBlock.LAYERS) && sourceState.getValue(LayeredBlock.LAYERS) == 15
                                 && destState.hasProperty(LayeredBlock.LAYERS) && destState.getValue(LayeredBlock.LAYERS) == 1;
                     });
+                    // Diagnostic (MINECRAFT-510): the correlated-contact listener above already
+                    // confirmed real, above-threshold-slip, positive-load, UP-face contacts DO
+                    // land on a prepared cell -- repeatedly, across dozens of real ticks, unlike
+                    // DivWheelContactConsumerGameTests' own single manually-posted event. If
+                    // real erosion genuinely applied more than once at the SAME cell (plausible
+                    // given ~70+ real qualifying contacts there, vs. that other test's exactly
+                    // one), the result may not be the clean one-hop 15/1 snapshot this check
+                    // looks for. Logging every cell that actually changed at all, with its real
+                    // final LAYERS value, to see the real end state directly rather than
+                    // guessing whether a stricter or looser check is the real gap.
+                    for (BlockPos cell : sourceCells) {
+                        var sourceState = helper.getBlockState(cell);
+                        var destState = helper.getBlockState(cell.east());
+                        if (sourceState.hasProperty(LayeredBlock.LAYERS) || destState.hasProperty(LayeredBlock.LAYERS)) {
+                            LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
+                                    "[DIV drivenWheelAcceptance] changed cell=" + cell
+                                            + " sourceLayers=" + (sourceState.hasProperty(LayeredBlock.LAYERS)
+                                                    ? sourceState.getValue(LayeredBlock.LAYERS) : "n/a")
+                                            + " destLayers=" + (destState.hasProperty(LayeredBlock.LAYERS)
+                                                    ? destState.getValue(LayeredBlock.LAYERS) : "n/a"));
+                        }
+                    }
                     LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
                             "[DIV drivenWheelAcceptance] expectApplied=" + expectApplied
                                     + " final vehicle localPos=(" + (ctx.handle.vehicle.position.x - ctx.originX)

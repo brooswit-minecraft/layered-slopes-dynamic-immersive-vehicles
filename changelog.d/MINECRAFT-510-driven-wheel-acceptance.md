@@ -145,3 +145,13 @@ bump: minor
   above-threshold slip genuinely happening nearby). Compares against each cell's own real
   absolute position (`helper.absolutePos`) instead, avoiding manual per-axis origin math
   entirely and incidentally also robust to structure rotation.
+- Run 44456158446 (head 1c999c4) confirms the fix: dozens of real correlated contacts on a
+  prepared cell, UP face, positive load, slip repeatedly well above the guaranteed-chance
+  threshold (up to 2.57 m/s) across ~70 real ticks -- yet `anyAppliedPair` is STILL false.
+  Unlike `DivWheelContactConsumerGameTests`' own single manually-posted event (which lands
+  cleanly at the one-hop 15/1 snapshot), this cell receives dozens of real qualifying contacts,
+  so if erosion applied more than once at the same cell the real end state may no longer be
+  that exact snapshot. Added a bounded diagnostic logging every cell that changed at all, with
+  its real final `LAYERS` value on both source and east neighbor, to see the real end state
+  directly rather than guessing whether the fix is a looser assertion or something else
+  entirely.
