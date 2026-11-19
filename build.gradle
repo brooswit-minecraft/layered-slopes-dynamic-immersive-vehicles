@@ -282,6 +282,22 @@ if (pairedRuntime) {
     }
 }
 
+// Real driven-wheel gameplay acceptance (MINECRAFT-510, ticket's own last required slice: "a
+// genuine Phase 3 raycast contact from an actually-driven vehicle, not a forced test command or
+// manually-posted event"). Needs Minecraft Transport Simulator's own vehicle/part classes
+// (EntityVehicleF_Physics, PartGroundDevice, PartEngine, ...) at COMPILE time to spawn and drive
+// a real vehicle -- unlike the rest of src/divIntegration, which never references MTS types
+// directly. Gated on BOTH divJar != null AND pairedRuntime (mts/Sable/Sable-Companion actually
+// present), the same two-condition shape dtPairedRuntime below uses for its own extra sourceSet,
+// so this compiles/runs ONLY under div-paired-runtime.yml's existing -PdivLocalJar
+// -PpairedRuntime=true invocation -- never the plain ci.yml build (no -PpairedRuntime) or the
+// plain div-paired-runtime smoke test alone.
+def divPairedRuntime = divJar != null && pairedRuntime
+if (divPairedRuntime) {
+    sourceSets.main.java.srcDir('src/divPairedRuntime/java')
+    sourceSets.main.resources.srcDir('src/divPairedRuntime/resources')
+}
+
 // Opt-in Dynamic-Terrain-paired-runtime check (review 54916/54917/54919/54920): proves
 // DynamicTerrainCaveInRisk's real behavior against an actual pinned legacy-dynamic-terrain
 // release, with its own real caveInsEnabled config toggled on disk, never as part of the
@@ -459,6 +475,12 @@ dependencies {
         runtimeOnly('dev.ryanhcode.sable:sable-neoforge-1.21.1:2.0.5') { transitive = false }
         runtimeOnly('dev.ryanhcode.sable-companion:sable-companion-common-1.21.1:1.6.0') { transitive = false }
         runtimeOnly('curse.maven:minecraft-transport-simulator-286703:7926606') { transitive = false }
+    }
+    if (divPairedRuntime) {
+        // src/divPairedRuntime needs MTS's own vehicle/part classes at compile time (see that
+        // sourceSet's own comment above) -- compileOnly, same exact coordinate pairedRuntime
+        // already pulls in at runtimeOnly above.
+        compileOnly('curse.maven:minecraft-transport-simulator-286703:7926606') { transitive = false }
     }
     if (dtPairedRuntime) {
         compileOnly files(dynamicTerrainJar).builtBy(tasks.named("downloadDynamicTerrain"))

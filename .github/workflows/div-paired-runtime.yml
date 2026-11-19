@@ -27,6 +27,7 @@ on:
       - 'build.gradle'
       - 'gradle.properties'
       - 'src/divIntegration/**'
+      - 'src/divPairedRuntime/**'
       - 'src/main/java/io/github/brooswitminecraft/layeredslopesdynamicimmersivevehicles/erosion/ErosionWheelContactIntegration.java'
 
 permissions:
@@ -120,7 +121,7 @@ jobs:
           # of this slice -- this now has a genuine successful terminal result to require,
           # rather than the guaranteed-nonzero "No test functions were given!" a zero-test
           # runGameTestServer always produces (review 54853/54854).
-          python3 scripts/check_gametest_count.py paired-runtime-boot.log 24
+          python3 scripts/check_gametest_count.py paired-runtime-boot.log 25
 
       - name: Verify every DIV-required mod actually loaded (not just this mod's own test passing)
         working-directory: compat
