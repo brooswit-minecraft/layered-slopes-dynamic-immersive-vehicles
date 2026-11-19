@@ -96,74 +96,129 @@ public final class DivDrivenWheelAcceptanceGameTests {
     private static final Point3D WHEEL_RR = new Point3D(-0.375, 0.125, -0.0625);
 
     private static final int SETTLE_TICKS = 30;
-    private static final int DRIVE_TICKS = 150;
+    private static final int DRIVE_TICKS = 200;
+    private static final int GRID_STEP = 3; // footprint radius 1 + this margin keeps adjacent cells' own neighbor requirements from overlapping
 
     /**
-     * The full real path, end to end: carve a grid of 25 independently-valid erosion-source
-     * cells across this template's real stone floor ({@link
-     * ErosionAttemptGameTests#placeSourceWithOneValidEastNeighbor}, spaced 4 blocks apart so no
-     * two cells' own self-contained neighbor requirements overlap), spawn a real vehicle, let it
-     * settle onto the real floor, then drive it forward with a steady rudder pulse for long
-     * enough to pass over several cells while genuinely slipping sideways -- real wheel contacts
-     * at real positions, through the real unmodified production chain. Succeeds only if at least
-     * one of the 25 prepared cells shows a real, non-zero {@code LayeredBlock.LAYERS} mutation
-     * afterward -- proof a genuine {@code ErosionAttempt.Outcome.APPLIED} actually happened from
-     * this driving, not merely that nothing crashed.
+     * Shared per-run state (review finding, direction comment 55300: {@code driveWithSlipFor}'s
+     * recursive {@code runAfterDelay} chain schedules later callbacks OUTSIDE the method's own
+     * initial try/catch -- an exception thrown from a later tick, or a timeout, could otherwise
+     * leave the real spawned vehicle and the real process-wide {@link ErosionModConfig#OVERRIDES}
+     * singleton behind). {@link #cleanup()} is idempotent (a plain one-shot guard -- everything
+     * here runs on the single server thread, never truly concurrently) and is called from every
+     * possible exit path below, including each individual recursive drive step.
+     */
+    private static final class TestContext {
+        final ErosionConfig priorConfig;
+        VehicleHandle handle;
+        private boolean cleanedUp = false;
+
+        TestContext(ErosionConfig priorConfig) {
+            this.priorConfig = priorConfig;
+        }
+
+        void cleanup() {
+            if (cleanedUp) {
+                return;
+            }
+            cleanedUp = true;
+            if (handle != null) {
+                handle.vehicle.remove();
+            }
+            ErosionModConfig.OVERRIDES.reload(priorConfig);
+        }
+    }
+
+    /**
+     * The full real path, end to end: carve a grid of independently-valid erosion-source cells
+     * across this template's real stone floor ({@link
+     * ErosionAttemptGameTests#placeSourceWithOneValidEastNeighbor}, spaced {@link #GRID_STEP}
+     * blocks apart so no two cells' own self-contained neighbor requirements overlap), spawn a
+     * real vehicle centered on that grid, let it settle onto the real floor, then drive it
+     * forward with a steady rudder pulse for long enough to pass over several cells while
+     * genuinely slipping sideways -- real wheel contacts at real positions, through the real
+     * unmodified production chain. Succeeds only if at least one prepared cell shows the real,
+     * conserved {@code ErosionAttempt} mutation shape (source {@code LayeredBlock.LAYERS == 15},
+     * its own east neighbor {@code == 1} -- the exact pair {@link DivWheelContactConsumerGameTests}'
+     * own real-wiring test already established as genuine {@code Outcome.APPLIED} evidence, not
+     * merely "any layered block exists").
      */
     @GameTest(template = "driven_wheel_platform", batch = "divDrivenWheelAcceptanceBatch", timeoutTicks = 400)
     public static void aGenuinelyDrivenVehicleWheelProducesARealErosionMutation(GameTestHelper helper) {
-        ErosionConfig priorConfig = ErosionModConfig.OVERRIDES.current();
+        runDrivenWheelScenario(helper, ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG, true);
+    }
+
+    /**
+     * The real, driven negative control the review explicitly asked for (direction comment
+     * 55300: "include the actual driven protected/disabled unchanged control... rather than
+     * using successful boot or manually-posted events as substitutes"): the IDENTICAL real
+     * vehicle, grid, and drive maneuver as the enabled test above, but with {@link
+     * ErosionModConfig#OVERRIDES} left at {@link ErosionConfig#DEFAULT} (real
+     * {@code erosionEnabled=false}) -- proving genuine driving alone, without the config gate
+     * also being on, produces no mutation at all. This is the same real-world/config contrast
+     * {@code ErosionModConfigGameTests} already establishes for the non-DIV path; this is that
+     * same contrast for the real, driven-vehicle path.
+     */
+    @GameTest(template = "driven_wheel_platform", batch = "divDrivenWheelAcceptanceBatch", timeoutTicks = 400)
+    public static void aGenuinelyDrivenVehicleWheelAppliesNoMutationWhenErosionDisabled(GameTestHelper helper) {
+        runDrivenWheelScenario(helper, ErosionConfig.DEFAULT, false);
+    }
+
+    private static void runDrivenWheelScenario(GameTestHelper helper, ErosionConfig scenarioConfig, boolean expectApplied) {
+        TestContext ctx = new TestContext(ErosionModConfig.OVERRIDES.current());
         try {
-            ErosionModConfig.OVERRIDES.reload(ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG);
+            ErosionModConfig.OVERRIDES.reload(scenarioConfig);
             ServerLevel level = (ServerLevel) helper.getLevel();
 
             List<BlockPos> sourceCells = new ArrayList<>();
-            for (int x = 2; x <= 18; x += 4) {
-                for (int z = 2; z <= 18; z += 4) {
+            for (int x = 2; x <= 18; x += GRID_STEP) {
+                for (int z = 2; z <= 18; z += GRID_STEP) {
                     BlockPos cellPos = new BlockPos(x, 1, z);
                     ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, cellPos);
                     sourceCells.add(cellPos);
                 }
             }
 
-            BlockPos spawnRelative = new BlockPos(10, 1, 3);
+            // Centered on the grid (not an edge/corner) so genuine driving reaches several cells
+            // regardless of which way the vehicle's own "forward" axis actually points.
+            BlockPos spawnRelative = new BlockPos(10, 1, 10);
             BlockPos spawnAbsolute = helper.absolutePos(spawnRelative);
-            VehicleHandle handle = spawnVehicle(level, spawnAbsolute);
+            ctx.handle = spawnVehicle(level, spawnAbsolute);
 
-            helper.runAfterDelay(SETTLE_TICKS, () -> {
+            helper.runAfterDelay(SETTLE_TICKS, () -> driveWithSlipFor(helper, ctx, DRIVE_TICKS, () -> {
                 try {
-                    driveWithSlipFor(helper, handle, DRIVE_TICKS, () -> {
-                        try {
-                            handle.vehicle.throttleVar.setTo(0.0, false);
-                            handle.vehicle.rudderInputVar.setTo(0.0, false);
-                            boolean anyApplied = sourceCells.stream().anyMatch(cell -> {
-                                var state = helper.getBlockState(cell);
-                                return state.hasProperty(LayeredBlock.LAYERS) && state.getValue(LayeredBlock.LAYERS) > 0;
-                            });
-                            // Diagnostic evidence for CI iteration if this still fails: the real
-                            // vehicle's own final position/motion, so a future run can tell
-                            // "never moved/drove at all" apart from "drove but missed every cell."
-                            LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
-                                    "[DIV drivenWheelAcceptance] final vehicle position=" + handle.vehicle.position
-                                            + " motion=" + handle.vehicle.motion
-                                            + " anyCellApplied=" + anyApplied);
-                            helper.assertTrue(anyApplied, "expected at least one of the " + sourceCells.size()
-                                    + " prepared dirt source cells to show a real erosion mutation after "
-                                    + "genuinely driving a real vehicle over this platform, but none did");
-                            helper.succeed();
-                        } finally {
-                            handle.vehicle.remove();
-                            ErosionModConfig.OVERRIDES.reload(priorConfig);
-                        }
+                    ctx.handle.vehicle.throttleVar.setTo(0.0, false);
+                    ctx.handle.vehicle.rudderInputVar.setTo(0.0, false);
+                    boolean anyAppliedPair = sourceCells.stream().anyMatch(cell -> {
+                        var sourceState = helper.getBlockState(cell);
+                        var destState = helper.getBlockState(cell.east());
+                        return sourceState.hasProperty(LayeredBlock.LAYERS) && sourceState.getValue(LayeredBlock.LAYERS) == 15
+                                && destState.hasProperty(LayeredBlock.LAYERS) && destState.getValue(LayeredBlock.LAYERS) == 1;
                     });
-                } catch (RuntimeException | Error e) {
-                    handle.vehicle.remove();
-                    ErosionModConfig.OVERRIDES.reload(priorConfig);
-                    throw e;
+                    LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
+                            "[DIV drivenWheelAcceptance] expectApplied=" + expectApplied
+                                    + " final vehicle position=" + ctx.handle.vehicle.position
+                                    + " motion=" + ctx.handle.vehicle.motion
+                                    + " anyAppliedPair=" + anyAppliedPair);
+                    if (expectApplied) {
+                        helper.assertTrue(anyAppliedPair, "expected at least one of the " + sourceCells.size()
+                                + " prepared dirt source cells to show the real conserved erosion mutation "
+                                + "(source LAYERS=15, east neighbor LAYERS=1) after genuinely driving a real "
+                                + "vehicle over this platform, but none did");
+                    } else {
+                        boolean anyChangedAtAll = sourceCells.stream().anyMatch(cell ->
+                                helper.getBlockState(cell).hasProperty(LayeredBlock.LAYERS));
+                        helper.assertTrue(!anyChangedAtAll, "expected every prepared dirt source cell to remain "
+                                + "plain dirt after genuinely driving a real vehicle over this platform with "
+                                + "erosion disabled, but at least one changed");
+                    }
+                    helper.succeed();
+                } finally {
+                    ctx.cleanup();
                 }
-            });
+            }));
         } catch (RuntimeException | Error e) {
-            ErosionModConfig.OVERRIDES.reload(priorConfig);
+            ctx.cleanup();
             throw e;
         }
     }
@@ -176,18 +231,33 @@ public final class DivDrivenWheelAcceptanceGameTests {
      * loop -- not a loop this method writes itself -- is what re-enters this test. Applies
      * throttle (closed-loop bang-bang toward {@link #LOW_SPEED_TARGET}, same as that probe) AND
      * a steady rudder pulse together throughout, rather than sequential phases, so the vehicle
-     * both covers real ground and genuinely slips sideways for the whole window.
+     * both covers real ground and genuinely slips sideways for the whole window. Each recursive
+     * step is independently guarded (review finding, direction comment 55300): an exception here
+     * triggers {@link TestContext#cleanup()} before propagating, not only the final step's own
+     * {@code finally}, since GameTest re-enters this chain on its own schedule, not through the
+     * one try/catch the scenario method itself wraps around the FIRST {@code runAfterDelay} call.
      */
-    private static void driveWithSlipFor(GameTestHelper helper, VehicleHandle handle, int remainingTicks, Runnable onDone) {
-        if (remainingTicks <= 0) {
-            onDone.run();
-            return;
+    private static void driveWithSlipFor(GameTestHelper helper, TestContext ctx, int remainingTicks, Runnable onDone) {
+        try {
+            if (remainingTicks <= 0) {
+                onDone.run();
+                return;
+            }
+            forceEngineRunning(ctx.handle.engine);
+            double speed = forwardSpeed(ctx.handle.vehicle);
+            ctx.handle.vehicle.throttleVar.setTo(speed < LOW_SPEED_TARGET ? 1.0 : 0.0, false);
+            ctx.handle.vehicle.rudderInputVar.setTo(RUDDER_DEGREES, false);
+            if (remainingTicks % 30 == 0) {
+                LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
+                        "[DIV drivenWheelAcceptance] ticksRemaining=" + remainingTicks
+                                + " position=" + ctx.handle.vehicle.position
+                                + " motion=" + ctx.handle.vehicle.motion + " forwardSpeed=" + speed);
+            }
+            helper.runAfterDelay(1, () -> driveWithSlipFor(helper, ctx, remainingTicks - 1, onDone));
+        } catch (RuntimeException | Error e) {
+            ctx.cleanup();
+            throw e;
         }
-        forceEngineRunning(handle.engine);
-        double speed = forwardSpeed(handle.vehicle);
-        handle.vehicle.throttleVar.setTo(speed < LOW_SPEED_TARGET ? 1.0 : 0.0, false);
-        handle.vehicle.rudderInputVar.setTo(RUDDER_DEGREES, false);
-        helper.runAfterDelay(1, () -> driveWithSlipFor(helper, handle, remainingTicks - 1, onDone));
     }
 
     private static double forwardSpeed(EntityVehicleF_Physics vehicle) {
