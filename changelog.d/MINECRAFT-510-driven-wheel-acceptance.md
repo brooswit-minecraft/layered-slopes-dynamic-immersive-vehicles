@@ -99,3 +99,15 @@ bump: minor
   {@code localPos} to every log line (the vehicle's real position minus the structure's own
   real origin, from {@code helper.absolutePos(BlockPos.ZERO)}), directly comparable against the
   grid's own coordinates on the next real run.
+- Real review findings (Jira comment 55306), fixed independently of the acceptance evidence
+  above: (1) `theSharedOverrideGuardLeavesTheConfigExactlyAsFoundAfterBothTestsComplete`'s own
+  fixed 10-tick wait was a guess that a batch does not actually guarantee outlasts every other
+  real acquirer sharing its guard -- including this test's own ~200-tick drive, whose duration
+  that observer has no way to know. It now polls a new, real
+  `GuaranteedChanceOverrideGuard.isFullyReleased()` signal every tick instead (bounded by its own
+  explicit `timeoutTicks`), which also tracks a real total-acquisition count so "every acquirer
+  already finished" can't be confused with "no acquirer has started yet" (both look identical as
+  plain `activeUsers == 0`). (2) The guard's `release()` for the enabled phase previously only
+  ran from that phase's own success path; any assertion or recursion-step failure would remove
+  the vehicle but leave the guard's acquisition held forever. Tied to `TestContext#cleanup()`
+  instead, which already runs from every one of this class's own exit paths.

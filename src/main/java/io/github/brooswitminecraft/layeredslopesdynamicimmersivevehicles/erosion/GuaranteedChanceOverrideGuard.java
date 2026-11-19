@@ -26,7 +26,18 @@ final class GuaranteedChanceOverrideGuard {
     private GuaranteedChanceOverrideGuard() {
     }
 
+    /**
+     * Total number of real {@code @GameTest} methods in {@code divWheelContactConsumerOverrideBatch}
+     * that call {@link #acquire()} exactly once each: the 3 in {@code DivWheelContactConsumerGameTests}
+     * plus the 1 combined enabled/disabled method in {@code DivDrivenWheelAcceptanceGameTests}.
+     * {@link #isFullyReleased()} needs this so it can distinguish "every real acquirer has
+     * finished" from "no real acquirer has even started yet" -- both look identical as plain
+     * {@code activeUsers == 0} (review finding, Jira comment 55306).
+     */
+    private static final int EXPECTED_TOTAL_ACQUISITIONS = 4;
+
     private static int activeUsers = 0;
+    private static int totalAcquisitions = 0;
     private static ErosionConfig originalOverrideBeforeAnyUser;
 
     /**
@@ -42,6 +53,7 @@ final class GuaranteedChanceOverrideGuard {
             originalOverrideBeforeAnyUser = ErosionModConfig.OVERRIDES.current();
         }
         activeUsers++;
+        totalAcquisitions++;
         ErosionModConfig.OVERRIDES.reload(ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG);
     }
 
@@ -56,5 +68,25 @@ final class GuaranteedChanceOverrideGuard {
         if (activeUsers == 0) {
             ErosionModConfig.OVERRIDES.reload(originalOverrideBeforeAnyUser);
         }
+    }
+
+    /**
+     * {@code true} once EVERY real acquirer in {@link #EXPECTED_TOTAL_ACQUISITIONS} has both
+     * started and finished -- i.e. the real pre-existing config has actually been restored, not
+     * merely "some fixed number of ticks has elapsed" (review finding, Jira comment 55306: a
+     * batch does not serialize different {@code @GameTest} methods against each other, so a
+     * same-batch observer asserting the restored config must poll this real signal rather than
+     * guessing a delay long enough to outlast every other acquirer in the batch, including ones
+     * -- like a long real vehicle drive -- it has no way to know the duration of).
+     *
+     * <p>{@code activeUsers == 0} alone is NOT enough: it is also trivially true before any real
+     * acquirer has even started (e.g. this batch's slow driven-wheel test not having reached its
+     * own {@link #acquire()} call yet), which would let a same-batch observer polling only that
+     * falsely declare success before the real work it is meant to observe ever ran. Requiring
+     * {@code totalAcquisitions} to have reached the real, known count of batch members that call
+     * {@link #acquire()} rules that out.
+     */
+    static boolean isFullyReleased() {
+        return activeUsers == 0 && totalAcquisitions >= EXPECTED_TOTAL_ACQUISITIONS;
     }
 }

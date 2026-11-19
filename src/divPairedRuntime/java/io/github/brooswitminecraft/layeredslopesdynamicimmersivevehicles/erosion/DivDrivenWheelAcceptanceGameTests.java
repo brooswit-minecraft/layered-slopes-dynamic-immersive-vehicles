@@ -148,6 +148,17 @@ public final class DivDrivenWheelAcceptanceGameTests {
          */
         double originX;
         double originZ;
+        /**
+         * Whether THIS phase is the one holding {@link GuaranteedChanceOverrideGuard}'s
+         * acquisition (only the enabled phase does). Review finding, Jira comment 55306:
+         * {@link #release()} previously only ran from the enabled phase's own success path (the
+         * {@code onDone} callback) -- any assertion/callback failure, or an exception from a
+         * recursive drive step, removed the vehicle via the old per-step {@code catch} blocks
+         * but left the guard's acquisition held forever, leaking it past this test's own real
+         * lifetime. Tying the release to {@link #cleanup()} instead -- already called from every
+         * one of this class's own exit paths -- makes it unconditional.
+         */
+        boolean releaseGuardOnCleanup;
         private boolean cleanedUp = false;
 
         void cleanup() {
@@ -157,6 +168,9 @@ public final class DivDrivenWheelAcceptanceGameTests {
             cleanedUp = true;
             if (handle != null) {
                 handle.vehicle.remove();
+            }
+            if (releaseGuardOnCleanup) {
+                GuaranteedChanceOverrideGuard.release();
             }
         }
     }
@@ -192,15 +206,19 @@ public final class DivDrivenWheelAcceptanceGameTests {
         ServerLevel level = (ServerLevel) helper.getLevel();
         List<BlockPos> sourceCells = buildSourceGrid(helper);
         GuaranteedChanceOverrideGuard.acquire();
-        runDrivenWheelPhase(helper, level, sourceCells, true, () -> {
-            GuaranteedChanceOverrideGuard.release();
+        runDrivenWheelPhase(helper, level, sourceCells, true, true, () -> {
             // Reset the SAME cells back to their clean dirt+neighbor shape (discarding phase
-            // one's own real mutation) before phase two reuses them -- erosionEnabled is
-            // genuinely back to its real default here, since release() above already ran.
+            // one's own real mutation) before phase two reuses them. Phase one's own cleanup()
+            // (its enclosing runDrivenWheelPhase call's own finally, running right after this
+            // onDone callback returns -- still the SAME tick) releases the guard immediately
+            // after this method returns; phase two's own real world-mutating ticks never start
+            // until a future tick (its own SETTLE_TICKS delay), by which point that release has
+            // already happened, so erosionEnabled is genuinely back to its real default before
+            // phase two's own driving ever actually runs.
             for (BlockPos cell : sourceCells) {
                 ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, cell);
             }
-            runDrivenWheelPhase(helper, level, sourceCells, false, helper::succeed);
+            runDrivenWheelPhase(helper, level, sourceCells, false, false, helper::succeed);
         });
     }
 
@@ -226,11 +244,16 @@ public final class DivDrivenWheelAcceptanceGameTests {
      * {@code == 1} -- the exact pair {@link DivWheelContactConsumerGameTests}' own real-wiring
      * test already established as genuine {@code Outcome.APPLIED} evidence, not merely "any
      * layered block exists") against {@code expectApplied}, removes the vehicle, then runs
-     * {@code onDone}.
+     * {@code onDone}. {@code releaseGuardOnCleanup} is {@code true} only for the enabled phase,
+     * which is the one that actually holds {@link GuaranteedChanceOverrideGuard}'s acquisition
+     * (review finding, Jira comment 55306: tying the release to {@link TestContext#cleanup()}
+     * -- already called from every one of this method's own exit paths, success or failure --
+     * makes it unconditional, rather than only running from a success-only callback).
      */
     private static void runDrivenWheelPhase(GameTestHelper helper, ServerLevel level, List<BlockPos> sourceCells,
-            boolean expectApplied, Runnable onDone) {
+            boolean expectApplied, boolean releaseGuardOnCleanup, Runnable onDone) {
         TestContext ctx = new TestContext();
+        ctx.releaseGuardOnCleanup = releaseGuardOnCleanup;
         try {
             // Real CI failure on this exact head (run 44451489283): chassisReceipt/classify
             // confirmed real Body activation, and the vehicle genuinely built real speed (~5

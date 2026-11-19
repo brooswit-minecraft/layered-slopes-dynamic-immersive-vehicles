@@ -188,17 +188,32 @@ public final class DivWheelContactConsumerGameTests {
      * 3-tick completion -- then asserts the real registered config is back to its real
      * boot-time default ({@code erosionEnabled=false}, independently proven by {@link
      * ErosionModConfigGameTests#realConfigBootsWithErosionDisabledByDefault}).
+     *
+     * <p>Review finding, Jira comment 55306: a batch does NOT serialize different
+     * {@code @GameTest} methods against each other, so this test cannot assume a fixed delay is
+     * long enough to outlast every real acquirer sharing this batch's guard -- including
+     * {@code DivDrivenWheelAcceptanceGameTests}' own real vehicle drive, which this class has no
+     * way to know the duration of. Polls {@link GuaranteedChanceOverrideGuard#isFullyReleased()}
+     * (the real signal, not a guess) every tick instead, bounded by this test's own explicit
+     * {@code timeoutTicks} -- a real timeout here (the guard never actually finishing releasing)
+     * is a genuine failure the framework should report, not something to silently paper over
+     * with an even longer guess.
      */
-    @GameTest(template = "flat_platform", batch = "divWheelContactConsumerOverrideBatch")
+    @GameTest(template = "flat_platform", batch = "divWheelContactConsumerOverrideBatch", timeoutTicks = 1000)
     public static void theSharedOverrideGuardLeavesTheConfigExactlyAsFoundAfterBothTestsComplete(
             GameTestHelper helper) {
-        helper.runAfterDelay(10, () -> {
-            helper.assertTrue(!ErosionModConfig.OVERRIDES.current().erosionEnabled(),
-                    "expected the real registered config's erosionEnabled to be back to its original "
-                            + "(default false) value by now -- the two overlapping guaranteed-chance "
-                            + "GameTests above must leave this process-wide singleton exactly as they "
-                            + "found it, regardless of their relative execution order");
-            helper.succeed();
-        });
+        pollUntilGuardFullyReleased(helper);
+    }
+
+    private static void pollUntilGuardFullyReleased(GameTestHelper helper) {
+        if (!GuaranteedChanceOverrideGuard.isFullyReleased()) {
+            helper.runAfterDelay(1, () -> pollUntilGuardFullyReleased(helper));
+            return;
+        }
+        helper.assertTrue(!ErosionModConfig.OVERRIDES.current().erosionEnabled(),
+                "expected the real registered config's erosionEnabled to be back to its original "
+                        + "(default false) value now that every real acquirer sharing this batch's "
+                        + "guard has released, regardless of their relative execution order");
+        helper.succeed();
     }
 }
