@@ -1,5 +1,6 @@
 package io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion;
 
+import io.github.brooswitminecraft.div.WheelGroundContactEvent;
 import io.github.brooswitminecraft.layeredslopes.LayeredBlock;
 import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.LayeredSlopesDynamicImmersiveVehiclesMod;
 
@@ -32,6 +33,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerLevel;
+import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
@@ -159,6 +161,19 @@ public final class DivDrivenWheelAcceptanceGameTests {
          * one of this class's own exit paths -- makes it unconditional.
          */
         boolean releaseGuardOnCleanup;
+        /**
+         * The real, bounded, fixture-scoped {@code WheelGroundContactEvent} listener registered
+         * for this phase (see {@link #runDrivenWheelPhase}'s own doc), unregistered here.
+         * Review finding, Jira comment 55308: aggregate production-consumer counters could not
+         * establish that the SAME real event simultaneously had an UP face, positive supported
+         * load, and above-threshold slip AT one of this test's own known prepared positions --
+         * only that some events somewhere had high slip and some (possibly different) events
+         * were at a known position. This listener correlates all of that per real event instead,
+         * scoped to this test's own dimension and grid, and is removed on cleanup like any other
+         * test-registered listener in this codebase (see {@code ErosionAttemptGameTests}' own
+         * {@code denyAtSource}/{@code swapSourceOnBreakEvent} pattern).
+         */
+        Object correlationListener;
         private boolean cleanedUp = false;
 
         void cleanup() {
@@ -166,6 +181,9 @@ public final class DivDrivenWheelAcceptanceGameTests {
                 return;
             }
             cleanedUp = true;
+            if (correlationListener != null) {
+                NeoForge.EVENT_BUS.unregister(correlationListener);
+            }
             if (handle != null) {
                 handle.vehicle.remove();
             }
@@ -276,15 +294,39 @@ public final class DivDrivenWheelAcceptanceGameTests {
             ctx.originX = originAbsolute.getX();
             ctx.originZ = originAbsolute.getZ();
             ctx.handle = spawnVehicle(level, spawnAbsolute);
-            // Diagnostic (MINECRAFT-510): real localPos telemetry across 3 real CI runs showed
-            // this vehicle only ever travels/circles within ~1-2 blocks of its own spawn point,
-            // never sweeping across the grid the way GroundSupportFixtureProbe's own real
-            // DRIVE_CHECK displacement does. Resetting DivWheelContactConsumer's own real
-            // diagnostic counters here (and logging them at phase end below) answers the next
-            // real question directly -- is genuine lateral slip (not just curving motion) ever
-            // actually happening at the real wheel-contact level at all -- rather than inferring
-            // it indirectly from chassis position/velocity again.
-            DivWheelContactConsumer.resetDiagnostics();
+            // Diagnostic (MINECRAFT-510, review finding Jira comment 55308): real localPos
+            // telemetry across 3 real CI runs showed this vehicle only ever travels/circles
+            // within ~1-2 blocks of its own spawn point, never sweeping across the grid the way
+            // GroundSupportFixtureProbe's own real DRIVE_CHECK displacement does. Aggregate
+            // production-consumer counters (a prior, now-reverted attempt at this diagnosis)
+            // could not establish that the SAME real event simultaneously had an UP face,
+            // positive supported load, and above-threshold slip AT one of this test's own known
+            // prepared positions. This bounded, fixture-scoped listener -- registered on the real
+            // NeoForge.EVENT_BUS the same way ErosionAttemptGameTests' own denyAtSource/
+            // swapSourceOnBreakEvent listeners are, and unregistered from cleanup() below --
+            // correlates all of that per real event, scoped to this test's own dimension and
+            // grid, answering that directly instead.
+            int originBlockXForListener = (int) ctx.originX;
+            int originBlockZForListener = (int) ctx.originZ;
+            Object correlationListener = new Object() {
+                @net.neoforged.bus.api.SubscribeEvent
+                public void onContact(WheelGroundContactEvent event) {
+                    if (!event.level().dimension().equals(level.dimension())) {
+                        return;
+                    }
+                    BlockPos local = new BlockPos(event.blockPos().getX() - originBlockXForListener,
+                            event.blockPos().getY(), event.blockPos().getZ() - originBlockZForListener);
+                    if (!sourceCells.contains(local)) {
+                        return;
+                    }
+                    LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
+                            "[DIV drivenWheelAcceptance] correlated contact on prepared cell local=" + local
+                                    + " face=" + event.face() + " slip=" + event.lateralSlipSpeedMetersPerSecond()
+                                    + " load=" + event.supportedLoadKg() + " tick=" + event.serverTick());
+                }
+            };
+            NeoForge.EVENT_BUS.register(correlationListener);
+            ctx.correlationListener = correlationListener;
 
             helper.runAfterDelay(SETTLE_TICKS, () -> driveStraightFor(helper, ctx, STRAIGHT_DRIVE_TICKS, () -> driveWithSlipFor(helper, ctx, TURN_TICKS, () -> {
                 try {
@@ -302,8 +344,7 @@ public final class DivDrivenWheelAcceptanceGameTests {
                                     + "," + (ctx.handle.vehicle.position.z - ctx.originZ) + ")"
                                     + " position=" + ctx.handle.vehicle.position
                                     + " motion=" + ctx.handle.vehicle.motion
-                                    + " anyAppliedPair=" + anyAppliedPair
-                                    + " " + DivWheelContactConsumer.diagnosticsSummary());
+                                    + " anyAppliedPair=" + anyAppliedPair);
                     if (expectApplied) {
                         helper.assertTrue(anyAppliedPair, "expected at least one of the " + sourceCells.size()
                                 + " prepared dirt source cells to show the real conserved erosion mutation "

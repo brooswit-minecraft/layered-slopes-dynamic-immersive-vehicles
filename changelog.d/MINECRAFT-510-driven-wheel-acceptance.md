@@ -120,3 +120,20 @@ bump: minor
   directly whether genuine lateral slip (not just curving motion, which can be clean/non-skidding
   and produce near-zero real slip) is ever actually happening at the real wheel-contact level,
   rather than continuing to infer it indirectly from chassis position/velocity.
+- Run 44454727367 (head faab6e6): those counters answered the question -- 261 real top-face
+  contacts, max real slip 2.41 m/s, well above the guaranteed-chance threshold. Real slip is
+  genuinely happening; still zero mutations. Real review findings, Jira comment 55308, both
+  fixed: (1) `GuaranteedChanceOverrideGuard`'s `EXPECTED_TOTAL_ACQUISITIONS` was wrongly 4 --
+  `theSharedOverrideGuardLeavesTheConfigExactlyAsFoundAfterBothTestsComplete` only OBSERVES the
+  guard, it never calls `acquire()`, and the disabled phase deliberately never acquires either;
+  the real count is 3 (the 2 event-posting consumer tests plus the 1 enabled driven phase).
+  Corrected, or the observer's own poll could never finish in this suite. (2) The aggregate
+  production-consumer counters added above could not establish that the SAME real event
+  simultaneously had an UP face, positive supported load, and above-threshold slip AT one of
+  this test's own known prepared positions -- only that some events somewhere had high slip and
+  some (possibly different) events were at a known position. Reverted those counters out of the
+  production `DivWheelContactConsumer` entirely and replaced them with a bounded, fixture-scoped
+  `WheelGroundContactEvent` listener registered directly by this test (the same real
+  register/unregister-in-cleanup pattern `ErosionAttemptGameTests`' own `denyAtSource`/
+  `swapSourceOnBreakEvent` listeners already use), scoped to this test's own dimension and grid,
+  logging face/slip/load/tick for every real event whose own position matches a prepared cell.

@@ -28,13 +28,20 @@ final class GuaranteedChanceOverrideGuard {
 
     /**
      * Total number of real {@code @GameTest} methods in {@code divWheelContactConsumerOverrideBatch}
-     * that call {@link #acquire()} exactly once each: the 3 in {@code DivWheelContactConsumerGameTests}
-     * plus the 1 combined enabled/disabled method in {@code DivDrivenWheelAcceptanceGameTests}.
-     * {@link #isFullyReleased()} needs this so it can distinguish "every real acquirer has
+     * that call {@link #acquire()} exactly once each. Review finding, Jira comment 55308: this
+     * was wrongly set to 4 (incorrectly counting {@code
+     * theSharedOverrideGuardLeavesTheConfigExactlyAsFoundAfterBothTestsComplete} itself as an
+     * acquirer -- it only OBSERVES the guard, it never calls {@link #acquire()}) -- the real
+     * count is exactly 3: the 2 real event-posting tests in {@code
+     * DivWheelContactConsumerGameTests} ({@code aRealPostedTopFaceEventFlowsThroughTheRealWiringToExactlyOneApplication}/
+     * {@code aRealPostedSideFaceEventNeverReachesAnAttemptThroughTheRealWiring}) plus the 1
+     * ENABLED phase of {@code DivDrivenWheelAcceptanceGameTests}' combined method (its DISABLED
+     * phase deliberately never acquires -- see that class's own doc). {@link
+     * #isFullyReleased()} needs this real count so it can distinguish "every real acquirer has
      * finished" from "no real acquirer has even started yet" -- both look identical as plain
-     * {@code activeUsers == 0} (review finding, Jira comment 55306).
+     * {@code activeUsers == 0}.
      */
-    private static final int EXPECTED_TOTAL_ACQUISITIONS = 4;
+    private static final int EXPECTED_TOTAL_ACQUISITIONS = 3;
 
     private static int activeUsers = 0;
     private static int totalAcquisitions = 0;
