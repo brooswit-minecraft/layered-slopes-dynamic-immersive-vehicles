@@ -21,10 +21,27 @@ bump: minor
   to gate on hash equality and failed closed on its very first real CI run once two separate
   builds of the same pinned commit were actually compared.
 - Declared `dynamicimmersivevehicles` as an `optional` `neoforge.mods.toml` dependency
-  (`ordering="AFTER"`), since this mod's other two consumers remain fully standalone of DIV and
-  the `ServiceLoader` seam already registers zero providers gracefully when DIV is absent --
+  (`ordering="AFTER"`), since this mod's other two consumers remain fully standalone of DIV --
   accurately declares the real runtime dependency this build now ships with, rather than
   omitting it entirely.
+- Real review finding (direction comment 55286): "the new optional-DIV explanation is not true
+  for the SAME compiled artifact. When src/divIntegration and META-INF/services are packaged,
+  ServiceLoader sees that provider regardless of DIV presence." Correct -- the "empty iterator
+  when DIV absent" guarantee only held while that provider metadata was itself conditionally
+  omitted; it is now always baked into this mod's own jar, so `ServiceLoader` always finds the
+  real provider class name, and resolving its real DIV-typed method signatures throws
+  `LinkageError`/`ServiceConfigurationError` if DIV itself is genuinely absent at runtime. Fixed
+  `LayeredSlopesDynamicImmersiveVehiclesMod`'s own registration loop to catch that per-provider
+  and skip it (logging a warning) rather than crashing mod construction over a different mod's
+  optional dependency being missing.
+- Added `missing-div-isolation-smoke` (`pinned-jar-smoke-acceptance.yml`), proving the fix above
+  against the real shipped artifact rather than "a separately rebuilt DIV-free variant" (the
+  same review finding's exact words): builds this mod's jar via the identical recipe `ci.yml`
+  uses (DIV built fresh from the pinned source commit, `-PdivLocalJar` pointed at it, so the
+  provider metadata really is baked in), verifies that directly by inspecting the built jar's
+  own contents, then boots a real dedicated server with that jar while DIV's own jar is
+  deliberately never installed -- asserting a clean "Done (" boot, 0 registered wheel-contact
+  integrations, DIV's own mod id absent from the Mod List, and a graceful shutdown.
 - `ci.yml`'s separate "Run GameTests" step deliberately stays DIV-free: booting a real dedicated
   server with DIV present also loads DIV itself as a mod, which pulls in DIV's own `neo_version`
   floor and its own `mts`/Sable/Sable-Companion dependencies -- already proven out by
