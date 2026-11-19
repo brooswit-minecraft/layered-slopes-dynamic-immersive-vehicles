@@ -137,6 +137,17 @@ public final class DivDrivenWheelAcceptanceGameTests {
      */
     private static final class TestContext {
         VehicleHandle handle;
+        /**
+         * The structure's own real-world origin (block coordinates at local (0,0,0)), captured
+         * once per phase so every log line can report the vehicle's own LOCAL (template-
+         * relative) position, not just its real absolute world one. Review-worthy diagnostic
+         * gap found while triaging run 44452612622: the absolute coordinates this class already
+         * logged (around 1.05e7) cannot be correlated against {@link #buildSourceGrid}'s own
+         * local 0-19 cell coordinates at all, so there was no way to tell from that log alone
+         * whether the vehicle's real path ever actually crossed a prepared cell.
+         */
+        double originX;
+        double originZ;
         private boolean cleanedUp = false;
 
         void cleanup() {
@@ -238,6 +249,9 @@ public final class DivDrivenWheelAcceptanceGameTests {
             // line travel (and the real skid at the end of it) stays directly over that column's
             // own z=2,5,8,11,14,17 cells.
             BlockPos spawnAbsolute = helper.absolutePos(new BlockPos(11, 1, 10));
+            BlockPos originAbsolute = helper.absolutePos(BlockPos.ZERO);
+            ctx.originX = originAbsolute.getX();
+            ctx.originZ = originAbsolute.getZ();
             ctx.handle = spawnVehicle(level, spawnAbsolute);
 
             helper.runAfterDelay(SETTLE_TICKS, () -> driveStraightFor(helper, ctx, STRAIGHT_DRIVE_TICKS, () -> driveWithSlipFor(helper, ctx, TURN_TICKS, () -> {
@@ -252,7 +266,9 @@ public final class DivDrivenWheelAcceptanceGameTests {
                     });
                     LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
                             "[DIV drivenWheelAcceptance] expectApplied=" + expectApplied
-                                    + " final vehicle position=" + ctx.handle.vehicle.position
+                                    + " final vehicle localPos=(" + (ctx.handle.vehicle.position.x - ctx.originX)
+                                    + "," + (ctx.handle.vehicle.position.z - ctx.originZ) + ")"
+                                    + " position=" + ctx.handle.vehicle.position
                                     + " motion=" + ctx.handle.vehicle.motion
                                     + " anyAppliedPair=" + anyAppliedPair);
                     if (expectApplied) {
@@ -301,6 +317,8 @@ public final class DivDrivenWheelAcceptanceGameTests {
             if (remainingTicks == STRAIGHT_DRIVE_TICKS || remainingTicks == 1) {
                 LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
                         "[DIV drivenWheelAcceptance] phase=straight ticksRemaining=" + remainingTicks
+                                + " localPos=(" + (ctx.handle.vehicle.position.x - ctx.originX)
+                                + "," + (ctx.handle.vehicle.position.z - ctx.originZ) + ")"
                                 + " position=" + ctx.handle.vehicle.position
                                 + " motion=" + ctx.handle.vehicle.motion + " forwardSpeed=" + speed);
             }
@@ -346,6 +364,8 @@ public final class DivDrivenWheelAcceptanceGameTests {
             if (remainingTicks % 10 == 0) {
                 LayeredSlopesDynamicImmersiveVehiclesMod.LOGGER.info(
                         "[DIV drivenWheelAcceptance] phase=turn ticksRemaining=" + remainingTicks
+                                + " localPos=(" + (ctx.handle.vehicle.position.x - ctx.originX)
+                                + "," + (ctx.handle.vehicle.position.z - ctx.originZ) + ")"
                                 + " position=" + ctx.handle.vehicle.position
                                 + " motion=" + ctx.handle.vehicle.motion + " forwardSpeed=" + speed);
             }

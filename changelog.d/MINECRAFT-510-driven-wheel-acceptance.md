@@ -90,3 +90,12 @@ bump: minor
   divisible by 30, so it never actually logged) and tightened the turn phase's own cadence to
   10 ticks (30 missed the exact moment speed collapsed) for better visibility on any future
   failure.
+- Real CI failure AGAIN on that exact fix (run 44452612622): this time the vehicle kept real,
+  nonzero speed throughout the turn (a curving loop, not a stall), yet `anyAppliedPair` was
+  still `false`. The absolute world coordinates this class was logging (around 1.05e7, since
+  GameTest places each structure far from the origin) could not be checked against
+  {@code buildSourceGrid}'s own local 0-19 cell coordinates at all -- there was no way to tell
+  from that log alone whether the real path ever actually crossed a prepared cell. Added
+  {@code localPos} to every log line (the vehicle's real position minus the structure's own
+  real origin, from {@code helper.absolutePos(BlockPos.ZERO)}), directly comparable against the
+  grid's own coordinates on the next real run.
