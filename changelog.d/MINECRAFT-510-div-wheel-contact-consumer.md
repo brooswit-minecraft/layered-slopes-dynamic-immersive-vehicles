@@ -79,3 +79,16 @@ bump: minor
   the safe `ServerTickEvent.Post` drain -- added an immediate assertion right after
   `NeoForge.EVENT_BUS.post(event)` that the source is still unchanged, ahead of the existing
   delayed assertion that it was eventually mutated.
+- Fixed a real race in that same `OVERRIDES` restore fix: both tests run in the same default
+  GameTest batch and each independently captured/restored the singleton, so an overlapping
+  setup/callback could capture the other test's temporary forced value instead of the true
+  original, and whichever restored last would decide the final (possibly wrong) state. Replaced
+  the two independent capture/restore pairs with a single reference-counted guard
+  (`acquireGuaranteedChanceOverride`/`releaseGuaranteedChanceOverride`): only the first acquirer
+  captures the real pre-existing snapshot, and only the last releaser restores it, correct
+  regardless of how the two tests' ticks interleave. Added a third GameTest,
+  `theSharedOverrideGuardLeavesTheConfigExactlyAsFoundAfterBothTestsComplete`, as the
+  deterministic post-batch evidence the review explicitly required: it waits past both other
+  tests' own completion and asserts the real registered config is back to its real default.
+  `div-paired-runtime.yml`'s expected GameTest count is bumped again, 23 -> 24, for this third
+  test.

@@ -31,20 +31,23 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
  * {@code div-paired-runtime.yml}'s real {@code runGameTestServer} boot -- same as every other
  * class in this sourceSet.
  *
- * <p>Forces {@link ErosionModConfig#OVERRIDES} to {@link
- * ErosionAttemptGameTests#GUARANTEED_CHANCE_CONFIG} directly (the real, global config singleton
- * {@link DivWheelContactConsumer} itself reads -- the only consumer in this codebase that reads
- * it rather than taking an explicit config parameter) rather than relying on a pre-seeded config
- * file. {@code OVERRIDES} is real, process-wide, shared-static state -- {@code
- * ErosionModConfigGameTests} and {@code ErosionClientSyncTestCommand} also read it, and {@code
- * ErosionModConfigGameTests}' own live-reload test documents the exact failure-safe-restore
- * contract this class must honor too (review finding M55554611-followup, Jira comment 55269 /
- * GitHub comment 6995553666: an earlier revision of this class incorrectly claimed to be the
- * only reader and left this singleton mutated after both tests, which would have made the whole
- * paired run's 23-test evidence order/concurrency-dependent). Each test below captures the prior
- * snapshot and restores it through both its own synchronous setup ({@code try/catch}) and its
- * delayed assertion ({@code finally}), so {@code OVERRIDES} is left exactly as found regardless
- * of success or failure.
+ * <p>Both event-posting tests below need {@link ErosionModConfig#OVERRIDES} (the real, global
+ * config singleton {@link DivWheelContactConsumer} itself reads) forced to {@link
+ * ErosionAttemptGameTests#GUARANTEED_CHANCE_CONFIG} for the whole of their asynchronous
+ * three-tick window, not just their own synchronous setup. {@code OVERRIDES} is real,
+ * process-wide, shared-static state -- {@code ErosionModConfigGameTests} and {@code
+ * ErosionClientSyncTestCommand} also read it. An earlier revision had each test independently
+ * capture-and-restore its own snapshot (review finding M55554611-followup, Jira comment 55269 /
+ * GitHub comment 6995553666), which is unsound once two such tests can overlap in the same
+ * default batch: if test B's setup runs while test A's forced override is still in effect, B
+ * would capture A's temporary value as its own "original," and whichever of the two restores
+ * last would decide the final (wrong) state -- review finding M55554611-followup-2, Jira comment
+ * 55274 / GitHub comment 6995981468. {@link #acquireGuaranteedChanceOverride()}/{@link
+ * #releaseGuaranteedChanceOverride()} fix this with a simple reference count: only the FIRST
+ * acquirer (whichever test reaches it first) captures the true pre-existing snapshot, and only
+ * the LAST releaser restores it -- correct regardless of how the two tests' ticks interleave,
+ * since both only ever run on the single server thread (never truly concurrently at the
+ * instruction level).
  */
 @GameTestHolder(LayeredSlopesDynamicImmersiveVehiclesMod.MODID)
 @PrefixGameTestTemplate(false)
@@ -57,6 +60,41 @@ public final class DivWheelContactConsumerGameTests {
     /** {@code ErosionConfig}'s real gravity-like unit: Earth-standard, matching other acceptance workflows. */
     private static final double GRAVITY = 9.8;
 
+    /** Reference-counted guard state for {@link #acquireGuaranteedChanceOverride()}. */
+    private static int activeOverrideUsers = 0;
+    /** The real pre-existing snapshot, captured only by the first acquirer. */
+    private static ErosionConfig originalOverrideBeforeAnyTest;
+
+    /**
+     * Forces {@link ErosionModConfig#OVERRIDES} to {@link
+     * ErosionAttemptGameTests#GUARANTEED_CHANCE_CONFIG}. Safe to call from more than one
+     * overlapping test: only the first call (while the count is zero) captures the real
+     * pre-existing snapshot into {@link #originalOverrideBeforeAnyTest} -- a second, overlapping
+     * call sees the count already above zero and does NOT overwrite that captured snapshot with
+     * the already-forced value, which is exactly the bug review finding M55554611-followup-2
+     * caught in the previous per-test independent capture.
+     */
+    private static void acquireGuaranteedChanceOverride() {
+        if (activeOverrideUsers == 0) {
+            originalOverrideBeforeAnyTest = ErosionModConfig.OVERRIDES.current();
+        }
+        activeOverrideUsers++;
+        ErosionModConfig.OVERRIDES.reload(ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG);
+    }
+
+    /**
+     * Releases one acquisition. Only restores {@link #originalOverrideBeforeAnyTest} once the
+     * count returns to zero -- i.e. only once EVERY overlapping acquirer has released -- so an
+     * earlier-finishing test can never prematurely restore the override while a later-finishing
+     * one still needs it forced on.
+     */
+    private static void releaseGuaranteedChanceOverride() {
+        activeOverrideUsers--;
+        if (activeOverrideUsers == 0) {
+            ErosionModConfig.OVERRIDES.reload(originalOverrideBeforeAnyTest);
+        }
+    }
+
     /**
      * The full real path: post a real, valid {@link WheelGroundContactEvent} for the source
      * position (top face) -> the real registered {@link DivWheelContactConsumer} snapshot-
@@ -65,27 +103,18 @@ public final class DivWheelContactConsumerGameTests {
      * past the 1 tick actually required) before asserting the eventual mutation, so that
      * assertion is never a race against the real drain's own timing.
      *
-     * <p>Review findings M55554611-followup (PR #17 @ 4c5a11c, Jira comment 55269 / GitHub
-     * comment 6995553666) required three corrections, all applied here: (1) an immediate
-     * assertion right after {@code NeoForge.EVENT_BUS.post(event)} that the source is still
-     * unchanged -- proof the event listener itself performs no synchronous mutation, only the
-     * later {@code ServerTickEvent.Post} drain does; (2) {@code REFERENCE_LOAD_KG * GRAVITY} as
-     * the {@code normalForce} argument, since {@link WheelGroundContactEvent#createIfValid}
-     * divides that argument by gravity to compute {@code supportedLoadKg} -- passing the raw kg
-     * value there published roughly a tenth of the intended reference load; (3) {@link
-     * ErosionModConfig#OVERRIDES} restored to its prior snapshot on every path (the synchronous
-     * setup via an outer {@code try/catch}, the delayed assertion itself via an inner {@code
-     * finally}) -- it is real, process-wide, shared-static state also read by {@code
-     * ErosionModConfigGameTests} and {@code ErosionClientSyncTestCommand}, so leaving it forced
-     * to {@code GUARANTEED_CHANCE_CONFIG} would make the whole 23-test paired run order/
-     * concurrency-dependent.
+     * <p>Also asserts immediately after posting the event that the source is still unchanged --
+     * proof the event listener itself performs no synchronous mutation, only the later {@code
+     * ServerTickEvent.Post} drain does (review finding M55554611-followup, Jira comment 55269 /
+     * GitHub comment 6995553666) -- and passes {@code REFERENCE_LOAD_KG * GRAVITY} as the
+     * {@code normalForce} argument, since {@link WheelGroundContactEvent#createIfValid} divides
+     * that argument by gravity to compute {@code supportedLoadKg} (same review finding).
      */
     @GameTest(template = "flat_platform")
     public static void aRealPostedTopFaceEventFlowsThroughTheRealWiringToExactlyOneApplication(
             GameTestHelper helper) {
-        ErosionConfig priorConfig = ErosionModConfig.OVERRIDES.current();
+        acquireGuaranteedChanceOverride();
         try {
-            ErosionModConfig.OVERRIDES.reload(ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG);
             BlockPos pos = new BlockPos(1, 2, 1);
             ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, pos);
             ServerLevel level = (ServerLevel) helper.getLevel();
@@ -116,11 +145,11 @@ public final class DivWheelContactConsumerGameTests {
                                     + destState);
                     helper.succeed();
                 } finally {
-                    ErosionModConfig.OVERRIDES.reload(priorConfig);
+                    releaseGuaranteedChanceOverride();
                 }
             });
         } catch (RuntimeException | Error e) {
-            ErosionModConfig.OVERRIDES.reload(priorConfig);
+            releaseGuaranteedChanceOverride();
             throw e;
         }
     }
@@ -130,14 +159,13 @@ public final class DivWheelContactConsumerGameTests {
      * correct"), proven through the REAL wiring this time (unit coverage already exists in
      * {@link WheelContactQueueTest}): a real event naming a SIDE face must reach no attempt at
      * all -- the source block must still be plain dirt after the real drain runs. Same {@code
-     * REFERENCE_LOAD_KG * GRAVITY} unit correction and {@code OVERRIDES} restore-on-every-path
-     * fix as the top-face test above; see that method's own doc for why.
+     * REFERENCE_LOAD_KG * GRAVITY} unit correction and shared-override-guard usage as the
+     * top-face test above; see that method's own doc, and this class's own doc, for why.
      */
     @GameTest(template = "flat_platform")
     public static void aRealPostedSideFaceEventNeverReachesAnAttemptThroughTheRealWiring(GameTestHelper helper) {
-        ErosionConfig priorConfig = ErosionModConfig.OVERRIDES.current();
+        acquireGuaranteedChanceOverride();
         try {
-            ErosionModConfig.OVERRIDES.reload(ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG);
             BlockPos pos = new BlockPos(1, 2, 4);
             ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, pos);
             ServerLevel level = (ServerLevel) helper.getLevel();
@@ -155,12 +183,35 @@ public final class DivWheelContactConsumerGameTests {
                                     + "source must still be plain dirt, got " + helper.getBlockState(pos));
                     helper.succeed();
                 } finally {
-                    ErosionModConfig.OVERRIDES.reload(priorConfig);
+                    releaseGuaranteedChanceOverride();
                 }
             });
         } catch (RuntimeException | Error e) {
-            ErosionModConfig.OVERRIDES.reload(priorConfig);
+            releaseGuaranteedChanceOverride();
             throw e;
         }
+    }
+
+    /**
+     * Deterministic evidence required by review (Jira comment 55274 / GitHub comment
+     * 6995981468: "add deterministic evidence that both tests may execute without changing the
+     * pre-existing override after the pair completes") that the guard above actually leaves
+     * {@link ErosionModConfig#OVERRIDES} exactly as it found it, regardless of how the two tests
+     * above interleave. Waits 10 ticks -- a comfortable margin past both other tests' own
+     * 3-tick completion -- then asserts the real registered config is back to its real
+     * boot-time default ({@code erosionEnabled=false}, independently proven by {@link
+     * ErosionModConfigGameTests#realConfigBootsWithErosionDisabledByDefault}).
+     */
+    @GameTest(template = "flat_platform")
+    public static void theSharedOverrideGuardLeavesTheConfigExactlyAsFoundAfterBothTestsComplete(
+            GameTestHelper helper) {
+        helper.runAfterDelay(10, () -> {
+            helper.assertTrue(!ErosionModConfig.OVERRIDES.current().erosionEnabled(),
+                    "expected the real registered config's erosionEnabled to be back to its original "
+                            + "(default false) value by now -- the two overlapping guaranteed-chance "
+                            + "GameTests above must leave this process-wide singleton exactly as they "
+                            + "found it, regardless of their relative execution order");
+            helper.succeed();
+        });
     }
 }
