@@ -421,6 +421,16 @@ neoForge {
                 // which always re-derives the real value fresh from the loaded config.
                 systemProperty 'dt.caveInsEnabled', (findProperty('dtCaveInsEnabled') ?: 'false') as String
             }
+            if (divPairedRuntime) {
+                // DivDrivenWheelAcceptanceGameTests' own real diagnostic evidence (MINECRAFT-510):
+                // a plain java system property, read by DIV's own already-shipped
+                // GroundContactDiagnostics regardless of which project's run forked this JVM --
+                // the SAME flag DIV's own GroundSupportFixtureProbe CI job relies on to
+                // distinguish its real PhysicsBridge.Body actually activating from MTS's native
+                // ground physics coincidentally also producing plausible-looking motion.
+                systemProperty 'div.debugGroundContact', 'true'
+                systemProperty 'div.debugGroundContactTicks', '300'
+            }
         }
 
         data {
