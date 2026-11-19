@@ -16,10 +16,18 @@ on:
       divRef:
         description: 'DIV commit/branch/tag to build against'
         required: true
-        default: '958e64551991b7d5c44520bf60d18034ebfa0df6'
+        # MINECRAFT-510 (direction comment 55238/M55554611): DIV main after merging PR #54,
+        # the generic WheelGroundContactEvent telemetry seam this mod's new divIntegration
+        # sourceSet (build.gradle, src/divIntegration/**) now compiles against. Bumped from the
+        # prior pin (958e645) specifically so this job exercises the real, merged event class.
+        default: '90893694e79b2fecd959153ff70d627418d2aa1c'
   pull_request:
     paths:
       - '.github/workflows/div-paired-runtime.yml'
+      - 'build.gradle'
+      - 'gradle.properties'
+      - 'src/divIntegration/**'
+      - 'src/main/java/io/github/brooswitminecraft/layeredslopesdynamicimmersivevehicles/erosion/ErosionWheelContactIntegration.java'
 
 permissions:
   contents: read
@@ -40,7 +48,7 @@ jobs:
           repository: brooswit-minecraft/dynamic-immersive-vehicles
           # workflow_dispatch lets the caller pick a ref; a plain pull_request run (this
           # workflow file's own validation path) always uses the known-good default commit.
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.divRef || '958e64551991b7d5c44520bf60d18034ebfa0df6' }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.divRef || '90893694e79b2fecd959153ff70d627418d2aa1c' }}
           path: div
 
       - name: Record the actual DIV commit checked out
@@ -112,7 +120,7 @@ jobs:
           # of this slice -- this now has a genuine successful terminal result to require,
           # rather than the guaranteed-nonzero "No test functions were given!" a zero-test
           # runGameTestServer always produces (review 54853/54854).
-          python3 scripts/check_gametest_count.py paired-runtime-boot.log
+          python3 scripts/check_gametest_count.py paired-runtime-boot.log 24
 
       - name: Verify every DIV-required mod actually loaded (not just this mod's own test passing)
         working-directory: compat

@@ -8,6 +8,9 @@ import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion
 import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionClientSyncProbe;
 import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionClientSyncTestCommand;
 import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionModConfig;
+import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionWheelContactIntegration;
+
+import java.util.ServiceLoader;
 
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
@@ -29,8 +32,12 @@ import net.neoforged.neoforge.common.NeoForge;
  * (direction, comment 54943's default-OFF switch) and listens for both its initial load and any
  * later reload, routing each into {@link ErosionModConfig#OVERRIDES}' atomic-rejected reload.
  *
- * <p>No erosion consumer is wired up yet -- that depends on DIV's own contact-telemetry seam,
- * which is itself deferred pending MINECRAFT-545's active PR on DIV's PhysicsBridge.java.
+ * <p>The real DIV wheel-contact consumer (MINECRAFT-510, direction comment 55238/M55554611) is
+ * loaded via {@link ServiceLoader} against {@link ErosionWheelContactIntegration} rather than a
+ * direct reference -- it can only ever be compiled/present when a local DIV jar is on the
+ * classpath (DIV ships no stable release yet), and this class must stay loadable/compilable on
+ * every ordinary build regardless. {@code ServiceLoader} returns an empty iterator, not an
+ * error, when no provider is present -- see that interface's own doc for the full seam.
  */
 @Mod(LayeredSlopesDynamicImmersiveVehiclesMod.MODID)
 public class LayeredSlopesDynamicImmersiveVehiclesMod {
@@ -52,6 +59,15 @@ public class LayeredSlopesDynamicImmersiveVehiclesMod {
         if (FMLEnvironment.dist == Dist.CLIENT && ErosionClientSyncLiveProbe.isEnabled()) {
             NeoForge.EVENT_BUS.addListener(ErosionClientSyncLiveProbe::onClientTick);
         }
-        LOGGER.info("Layered Slopes Dynamic Immersive Vehicles loaded (erosion consumer not yet wired up)");
+        // Empty on every ordinary build (no DIV on the classpath, no provider-configuration
+        // file present) -- never a NoClassDefFoundError risk. See
+        // ErosionWheelContactIntegration's own doc.
+        int registeredWheelContactIntegrations = 0;
+        for (var integration : ServiceLoader.load(ErosionWheelContactIntegration.class, getClass().getClassLoader())) {
+            integration.register();
+            registeredWheelContactIntegrations++;
+        }
+        LOGGER.info("Layered Slopes Dynamic Immersive Vehicles loaded (wheel-contact integrations registered: "
+                + registeredWheelContactIntegrations + ")");
     }
 }

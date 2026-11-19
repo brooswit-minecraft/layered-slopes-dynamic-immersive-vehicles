@@ -112,4 +112,26 @@ class ErosionDedupTest {
         assertFalse(dedup.tryClaim(OVERWORLD, 1, 2, 3, 100));
         assertTrue(dedup.tryClaim(OVERWORLD, 4, 5, 6, 100));
     }
+
+    @Test
+    void resetAllowsANewLowerTickThatWouldOtherwiseBeARegression() {
+        // MINECRAFT-510 review finding: a caller holding one instance across more than one
+        // server lifetime (e.g. a static field living for the whole mod-loaded JVM, across a
+        // singleplayer world switch within one running game client) must be able to start the
+        // new lifetime's tick counter back at a low value without hitting the regression guard.
+        ErosionDedup dedup = new ErosionDedup();
+        assertTrue(dedup.tryClaim(OVERWORLD, 1, 2, 3, 500));
+        dedup.reset();
+        assertTrue(dedup.tryClaim(OVERWORLD, 1, 2, 3, 0), "tick 0 after reset must not be treated as a regression");
+    }
+
+    @Test
+    void resetClearsPriorClaimsSoTheSamePositionIsClaimableAgain() {
+        ErosionDedup dedup = new ErosionDedup();
+        assertTrue(dedup.tryClaim(OVERWORLD, 1, 2, 3, 100));
+        assertFalse(dedup.tryClaim(OVERWORLD, 1, 2, 3, 100), "sanity: denied before reset");
+        dedup.reset();
+        assertTrue(dedup.tryClaim(OVERWORLD, 1, 2, 3, 100),
+                "the same (dimension, position, tick) must be freshly claimable after reset");
+    }
 }
