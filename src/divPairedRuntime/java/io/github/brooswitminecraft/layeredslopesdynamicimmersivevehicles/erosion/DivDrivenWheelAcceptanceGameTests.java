@@ -103,7 +103,15 @@ public final class DivDrivenWheelAcceptanceGameTests {
     // GroundSupportFixtureProbe's own proven sequence, which NEVER combines rudder with throttle
     // from a standing start: it drives STRAIGHT first (building real, clean speed), only THEN
     // adds rudder while already cruising. Split into the same two sequential phases here.
-    private static final int STRAIGHT_DRIVE_TICKS = 100;
+    //
+    // A second real CI run (still direction comment 55301) confirmed the fix above produced
+    // genuine, SUSTAINED ~4-5 m/s motion throughout both phases -- but STRAIGHT_DRIVE_TICKS=100
+    // at that real speed is up to ~25 blocks of straight-line travel, more than this 20-wide
+    // platform's own extent: the vehicle overshot every prepared grid cell (which stop at 18)
+    // before the TURN phase (which curves, rather than traveling indefinitely far) ever began.
+    // Shortened to just enough real time to get moving, so the TURN phase's own curving starts
+    // close to the grid's own center instead of far past its edge.
+    private static final int STRAIGHT_DRIVE_TICKS = 20;
     private static final int TURN_TICKS = 150;
     private static final int GRID_STEP = 3; // footprint radius 1 + this margin keeps adjacent cells' own neighbor requirements from overlapping
 
