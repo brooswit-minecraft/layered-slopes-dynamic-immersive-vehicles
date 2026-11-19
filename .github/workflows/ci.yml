@@ -11,6 +11,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      jar_sha256: ${{ steps.jarhash.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -27,18 +29,88 @@ jobs:
       - name: Check the mod does not require a newer NeoForge than the pack runs
         run: python3 scripts/check_neoforge_floor.py
 
-      - name: Build and test
-        run: ./gradlew build --no-daemon
-
       # StandaloneBootGameTests.theGameTestHarnessBootsForThisMod is the first real GameTest
-      # (trivial -- no erosion consumer yet, only proof the harness boots for this mod).
-      # check_gametest_count.py fails closed unless exactly this count completed and passed, not
-      # just a green exit code.
+      # (trivial -- no erosion consumer yet, only proof the harness boots for this mod). Runs
+      # WITHOUT -PdivLocalJar (DIV absent from the classpath here, deliberately): booting a real
+      # dedicated server with DIV present would also load DIV itself as a mod, which requires
+      # DIV's own neo_version floor and its own mts/Sable/Sable-Companion dependencies -- exactly
+      # what div-paired-runtime.yml's separate, opt-in job already exists to prove, with those
+      # extra dependencies wired in. Keeping this plain boot-smoke step DIV-free keeps it fast and
+      # avoids duplicating that other job's job here. check_gametest_count.py fails closed unless
+      # exactly this count completed and passed, not just a green exit code.
       - name: Run GameTests
         run: |
           set -o pipefail
           ./gradlew runGameTestServer --no-daemon 2>&1 | tee gametest.log
           python3 scripts/check_gametest_count.py gametest.log
+
+      # MINECRAFT-510 (direction, comment 55251): "src/divIntegration and provider metadata
+      # currently disappear from a normal build, leaving a nonfunctional wheel-erosion artifact
+      # ... DIV's missing public release does not prevent an immutable source-pinned dependency
+      # build and verified jar hashing, already exercised by paired CI." Reuses exactly that
+      # already-proven route (div-paired-runtime.yml's own checkout-and-build steps) so the jar
+      # this job uploads below -- the real, intended ordinary deliverable -- actually contains
+      # the production DIV wheel-contact consumer, not just test-only/opt-in builds.
+      - name: Read the pinned DIV ref from gradle.properties (single source of truth)
+        id: divpin
+        run: echo "ref=$(grep '^div_pinned_ref=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out DIV at the pinned ref
+        uses: actions/checkout@v4
+        with:
+          repository: brooswit-minecraft/dynamic-immersive-vehicles
+          ref: ${{ steps.divpin.outputs.ref }}
+          path: div
+
+      - name: Set up Gradle 8.8 (DIV's own proven toolchain, matches its ci.yml)
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.8'
+
+      - name: Build DIV from the pinned source commit
+        working-directory: div
+        run: gradle --no-daemon --stacktrace clean build -x test
+
+      # Confirmed by a real CI failure on this exact step (MINECRAFT-510): DIV's own `jar` task
+      # embeds real per-build timestamps (no `preserveFileTimestamps`/`reproducibleFileOrder`
+      # set), so the SAME pinned commit produces a DIFFERENT jar sha256 on every separate build
+      # -- a cross-run hash-equality gate here would be a false-failure trap, not a real
+      # integrity check. This step therefore only verifies exactly one jar was produced (the
+      # real, already-proven check) and logs the sha256 it actually got, for audit purposes --
+      # the same thing div-paired-runtime.yml's own equivalent step has always done. The git
+      # commit SHA pinned above (div_pinned_ref) is itself the real, immutable source-integrity
+      # guarantee; it already cryptographically binds the exact tree this jar was built from.
+      - name: Verify exactly one DIV jar was produced, and log its sha256
+        id: divjar
+        run: |
+          expected="div/build/libs/dynamic-immersive-vehicles-0.1.0-SNAPSHOT.jar"
+          if [ ! -f "$expected" ]; then
+            echo "::error::expected DIV artifact '$expected' was not produced -- found instead:"
+            ls -la div/build/libs/ || true
+            exit 1
+          fi
+          actual_count=$(find div/build/libs -maxdepth 1 -name '*.jar' | wc -l)
+          if [ "$actual_count" -ne 1 ]; then
+            echo "::error::expected exactly 1 jar under div/build/libs, found $actual_count:"
+            ls -la div/build/libs/
+            exit 1
+          fi
+          echo "DIV jar sha256 (this build, not reproducible across builds -- see gradle.properties): $(sha256sum "$expected" | cut -d' ' -f1)"
+          echo "path=$(readlink -f "$expected")" >> "$GITHUB_OUTPUT"
+
+      - name: Build and test (with the verified, pinned DIV jar on the classpath)
+        run: ./gradlew build --no-daemon "-PdivLocalJar=${{ steps.divjar.outputs.path }}"
+
+      # Review finding (MINECRAFT-510, direction comment 55289): a sibling job that rebuilds
+      # this mod's jar "by the same recipe" still produces different bytes (this is literally
+      # the non-reproducibility this same ticket already proved for DIV's own jar), so it would
+      # only prove same-RECIPE behavior, not that the actual uploaded deliverable bytes below
+      # were tested. Recording this build's own real sha256 as a job output lets a downstream
+      # job (needs: build) verify the artifact it downloads is bit-for-bit the one THIS job just
+      # produced, not an independent rebuild.
+      - name: Record this build's own jar sha256
+        id: jarhash
+        run: echo "sha256=$(sha256sum build/libs/*.jar | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Upload mod jar
         uses: actions/upload-artifact@v4
@@ -46,6 +118,306 @@ jobs:
           name: layered-slopes-dynamic-immersive-vehicles
           path: build/libs/*.jar
           if-no-files-found: error
+
+  # Review finding (MINECRAFT-510, direction comment 55286/55289): "run missing-DIV/isolation
+  # against the exact uploaded production jar, not a separately rebuilt DIV-free variant ...
+  # [still] rebuilds it independently (./gradlew jar ... -PdivLocalJar) rather than consuming
+  # ci.yml's produced/uploaded artifact. Thus it proves same-recipe behavior, not that the
+  # intended deliverable bytes were tested. Please pass the CI-produced jar plus SHA-256
+  # manifest to the smoke job(s), verify its hash before boot, and test that same jar both with
+  # and without DIV. Use a shared producer/dependent jobs or equivalent exact-artifact
+  # transfer." This job (and with-div-isolation-smoke below) `needs: build` and downloads the
+  # exact artifact that job uploaded -- never rebuilds this mod's own jar -- verifying its
+  # sha256 against `build`'s own recorded output before ever booting it.
+  missing-div-isolation-smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Download the exact jar the build job produced (never an independent rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          name: layered-slopes-dynamic-immersive-vehicles
+          path: downloaded-jar
+
+      - name: Verify the downloaded jar's sha256 matches the build job's own record
+        run: |
+          actual=$(sha256sum downloaded-jar/*.jar | cut -d' ' -f1)
+          expected="${{ needs.build.outputs.jar_sha256 }}"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::downloaded artifact sha256 ($actual) does not match the build job's own recorded sha256 ($expected) -- refusing to boot an unverified artifact"
+            exit 1
+          fi
+          echo "confirmed: downloaded jar is bit-for-bit the one the build job produced (sha256 $actual)"
+
+      - name: Verify the downloaded jar bundles the DIV wheel-contact provider metadata (not a DIV-free variant)
+        run: |
+          if ! unzip -l downloaded-jar/*.jar | grep -q 'META-INF/services/io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionWheelContactIntegration'; then
+            echo "::error::downloaded jar does not bundle the DIV wheel-contact provider metadata -- this job would otherwise be testing a non-representative DIV-free variant, not the real shipped artifact"
+            exit 1
+          fi
+
+      - name: Download+verify the pinned base-mod jars
+        run: ./gradlew downloadLayeredSlopes downloadLayeredSlopeGrading --no-daemon
+
+      - name: Install a real NeoForge dedicated-server distribution
+        run: |
+          neo_version=$(grep '^neo_version=' gradle.properties | cut -d= -f2)
+          mkdir server && cd server
+          curl -sL -o installer.jar "https://maven.neoforged.net/releases/net/neoforged/neoforge/${neo_version}/neoforge-${neo_version}-installer.jar"
+          java -jar installer.jar --installServer
+          echo "eula=true" > eula.txt
+          mkdir mods
+
+      - name: Drop the downloaded mod jar and the base-mod jars into mods/ -- DIV's own jar is deliberately NEVER installed
+        run: |
+          cp downloaded-jar/*.jar server/mods/
+          cp build/layeredslopes/*.jar server/mods/
+          cp build/layeredslopegrading/*.jar server/mods/
+          ls -la server/mods/
+
+      - name: Boot the real distribution with the downloaded jar but DIV genuinely absent, then stop it gracefully
+        working-directory: server
+        run: |
+          set -o pipefail
+          mkfifo stdin.pipe
+          exec 9<>stdin.pipe
+          timeout 150 ./run.sh --nogui < stdin.pipe > boot.log 2>&1 &
+          boot_pid=$!
+          for i in $(seq 1 60); do
+            if grep -qE 'Done \(|FAILED TO START|ModLoadingException|Failed to start' boot.log 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          echo "stop" > stdin.pipe
+          graceful=false
+          for i in $(seq 1 30); do
+            if ! kill -0 "$boot_pid" 2>/dev/null; then
+              graceful=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$graceful" != "true" ]; then
+            echo "::warning::server did not exit on its own within 30s of 'stop' -- force killing as a fallback, cleanup evidence below will reflect this"
+            kill -9 "$boot_pid" 2>/dev/null || true
+          fi
+          exec 9>&-
+          rm -f stdin.pipe
+          echo "graceful=${graceful}" > shutdown-status.txt
+          cat boot.log
+
+      - name: Verify a real, successful boot with DIV's provider metadata present but DIV itself genuinely absent, no crash, graceful shutdown
+        working-directory: server
+        run: |
+          if ! grep -q 'Done (' boot.log; then
+            echo "::error::expected a real 'Done (' startup line -- the downloaded production jar did not boot successfully with DIV absent"
+            exit 1
+          fi
+          if grep -qE 'FAILED TO START|ModLoadingException|Failed to start' boot.log; then
+            echo "::error::found a real mod-loading failure marker -- the downloaded production jar must boot cleanly even though its own baked-in provider metadata names a DIV class not actually on this server's classpath"
+            exit 1
+          fi
+          for modid in '(layeredslopes)' '(layeredslopegrading)' '(layeredslopesdynamicimmersivevehicles)'; do
+            if ! grep -qF "$modid" boot.log; then
+              echo "::error::expected '$modid' in the real Mod List, not found"
+              exit 1
+            fi
+          done
+          if grep -qF '(dynamicimmersivevehicles)' boot.log; then
+            echo "::error::found DIV's own modid in the Mod List, but its jar was deliberately never installed -- something is wrong with this job's isolation"
+            exit 1
+          fi
+          if ! grep -qF 'wheel-contact integrations registered: 0' boot.log; then
+            echo "::error::expected the real entry point's own log line reporting 0 registered wheel-contact integrations"
+            exit 1
+          fi
+          if ! grep -qF 'graceful=true' shutdown-status.txt; then
+            echo "::error::the server did not exit on its own within 30s of the real stdin 'stop' command"
+            exit 1
+          fi
+          for marker in 'Stopping server' 'Saving worlds' 'All dimensions are saved'; do
+            if ! grep -qF "$marker" boot.log; then
+              echo "::error::expected the real vanilla/NeoForge graceful-shutdown log line '$marker' -- not found"
+              exit 1
+            fi
+          done
+          echo "confirmed: the exact downloaded production jar boots cleanly with DIV genuinely absent, registers 0 wheel-contact integrations, and shuts down gracefully"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: missing-div-isolation-smoke-evidence
+          path: |
+            server/boot.log
+            server/shutdown-status.txt
+          if-no-files-found: warn
+
+  # Companion to missing-div-isolation-smoke above (direction comment 55289: "test that same
+  # jar both with and without DIV"): downloads the SAME artifact `build` produced, verifies its
+  # sha256 the same way, but this time boots it WITH DIV (built fresh from the pinned source
+  # commit -- a separate artifact, not the thing under scrutiny here) and its own real required
+  # dependencies (mts/Sable/Sable-Companion, fetched via build.gradle's existing
+  # copyPairedRuntimeJars task) actually installed, proving the baked-in provider genuinely
+  # registers and works when DIV IS present, not only that it degrades gracefully when absent.
+  with-div-isolation-smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+        with:
+          path: compat
+
+      - name: Read the pinned DIV ref from gradle.properties
+        id: divpin
+        working-directory: compat
+        run: echo "ref=$(grep '^div_pinned_ref=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out DIV at the pinned ref
+        uses: actions/checkout@v4
+        with:
+          repository: brooswit-minecraft/dynamic-immersive-vehicles
+          ref: ${{ steps.divpin.outputs.ref }}
+          path: div
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Gradle 8.8 (DIV's own proven toolchain, matches its ci.yml)
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.8'
+
+      - name: Build DIV from the pinned source commit
+        working-directory: div
+        run: gradle --no-daemon --stacktrace clean build -x test
+
+      - name: Download the exact jar the build job produced (never an independent rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          name: layered-slopes-dynamic-immersive-vehicles
+          path: downloaded-jar
+
+      - name: Verify the downloaded jar's sha256 matches the build job's own record
+        run: |
+          actual=$(sha256sum downloaded-jar/*.jar | cut -d' ' -f1)
+          expected="${{ needs.build.outputs.jar_sha256 }}"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::downloaded artifact sha256 ($actual) does not match the build job's own recorded sha256 ($expected) -- refusing to boot an unverified artifact"
+            exit 1
+          fi
+          echo "confirmed: downloaded jar is bit-for-bit the one the build job produced (sha256 $actual)"
+
+      - name: Download+verify the pinned base-mod jars, and DIV's own required paired-runtime dependencies
+        working-directory: compat
+        run: |
+          ./gradlew downloadLayeredSlopes downloadLayeredSlopeGrading copyPairedRuntimeJars --no-daemon -PpairedRuntime=true
+
+      - name: Install a real NeoForge dedicated-server distribution (DIV's own higher neo_version floor)
+        working-directory: compat
+        run: |
+          mkdir server && cd server
+          curl -sL -o installer.jar "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.265/neoforge-21.1.265-installer.jar"
+          java -jar installer.jar --installServer
+          echo "eula=true" > eula.txt
+          mkdir mods
+
+      - name: Drop the downloaded mod jar, DIV's own jar, and every DIV-required dependency into mods/
+        working-directory: compat
+        run: |
+          cp ../downloaded-jar/*.jar server/mods/
+          cp build/layeredslopes/*.jar server/mods/
+          cp build/layeredslopegrading/*.jar server/mods/
+          cp ../div/build/libs/*.jar server/mods/
+          cp build/pairedRuntimeJars/*.jar server/mods/
+          ls -la server/mods/
+
+      - name: Boot the real distribution with the downloaded jar and DIV genuinely present, then stop it gracefully
+        working-directory: compat/server
+        run: |
+          set -o pipefail
+          mkfifo stdin.pipe
+          exec 9<>stdin.pipe
+          timeout 150 ./run.sh --nogui < stdin.pipe > boot.log 2>&1 &
+          boot_pid=$!
+          for i in $(seq 1 60); do
+            if grep -qE 'Done \(|FAILED TO START|ModLoadingException|Failed to start' boot.log 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          echo "stop" > stdin.pipe
+          graceful=false
+          for i in $(seq 1 30); do
+            if ! kill -0 "$boot_pid" 2>/dev/null; then
+              graceful=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$graceful" != "true" ]; then
+            echo "::warning::server did not exit on its own within 30s of 'stop' -- force killing as a fallback"
+            kill -9 "$boot_pid" 2>/dev/null || true
+          fi
+          exec 9>&-
+          rm -f stdin.pipe
+          echo "graceful=${graceful}" > shutdown-status.txt
+          cat boot.log
+
+      - name: Verify a real, successful boot with DIV present, exactly 1 registered integration, graceful shutdown
+        working-directory: compat/server
+        run: |
+          if ! grep -q 'Done (' boot.log; then
+            echo "::error::expected a real 'Done (' startup line -- the downloaded production jar did not boot successfully with DIV present"
+            exit 1
+          fi
+          if grep -qE 'FAILED TO START|ModLoadingException|Failed to start' boot.log; then
+            echo "::error::found a real mod-loading failure marker"
+            exit 1
+          fi
+          for modid in '(layeredslopes)' '(layeredslopegrading)' '(layeredslopesdynamicimmersivevehicles)' '(dynamicimmersivevehicles)'; do
+            if ! grep -qF "$modid" boot.log; then
+              echo "::error::expected '$modid' in the real Mod List, not found"
+              exit 1
+            fi
+          done
+          if ! grep -qF 'wheel-contact integrations registered: 1' boot.log; then
+            echo "::error::expected the real entry point's own log line reporting exactly 1 registered wheel-contact integration when DIV is genuinely present"
+            exit 1
+          fi
+          if ! grep -qF 'graceful=true' shutdown-status.txt; then
+            echo "::error::the server did not exit on its own within 30s of the real stdin 'stop' command"
+            exit 1
+          fi
+          for marker in 'Stopping server' 'Saving worlds' 'All dimensions are saved'; do
+            if ! grep -qF "$marker" boot.log; then
+              echo "::error::expected the real vanilla/NeoForge graceful-shutdown log line '$marker' -- not found"
+              exit 1
+            fi
+          done
+          echo "confirmed: the exact downloaded production jar boots cleanly with DIV genuinely present, registers exactly 1 wheel-contact integration, and shuts down gracefully"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: with-div-isolation-smoke-evidence
+          path: |
+            compat/server/boot.log
+            compat/server/shutdown-status.txt
+          if-no-files-found: warn
 
   release-gate:
     uses: brooswit-factory/release-gate/.github/workflows/gate.yml@v1

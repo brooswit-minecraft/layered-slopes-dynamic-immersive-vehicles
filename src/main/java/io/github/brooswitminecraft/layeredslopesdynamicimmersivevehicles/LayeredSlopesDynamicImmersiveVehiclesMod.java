@@ -10,6 +10,8 @@ import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion
 import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionModConfig;
 import io.github.brooswitminecraft.layeredslopesdynamicimmersivevehicles.erosion.ErosionWheelContactIntegration;
 
+import java.util.Iterator;
+import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 
 import net.neoforged.api.distmarker.Dist;
@@ -34,10 +36,10 @@ import net.neoforged.neoforge.common.NeoForge;
  *
  * <p>The real DIV wheel-contact consumer (MINECRAFT-510, direction comment 55238/M55554611) is
  * loaded via {@link ServiceLoader} against {@link ErosionWheelContactIntegration} rather than a
- * direct reference -- it can only ever be compiled/present when a local DIV jar is on the
- * classpath (DIV ships no stable release yet), and this class must stay loadable/compilable on
- * every ordinary build regardless. {@code ServiceLoader} returns an empty iterator, not an
- * error, when no provider is present -- see that interface's own doc for the full seam.
+ * direct reference -- see that interface's own doc for the full seam, and why the provider
+ * catch below is required once this mod's own build pins and bundles DIV at build time
+ * (direction comment 55251) while DIV itself stays an optional runtime dependency that may
+ * still be genuinely absent from any given server.
  */
 @Mod(LayeredSlopesDynamicImmersiveVehiclesMod.MODID)
 public class LayeredSlopesDynamicImmersiveVehiclesMod {
@@ -59,13 +61,30 @@ public class LayeredSlopesDynamicImmersiveVehiclesMod {
         if (FMLEnvironment.dist == Dist.CLIENT && ErosionClientSyncLiveProbe.isEnabled()) {
             NeoForge.EVENT_BUS.addListener(ErosionClientSyncLiveProbe::onClientTick);
         }
-        // Empty on every ordinary build (no DIV on the classpath, no provider-configuration
-        // file present) -- never a NoClassDefFoundError risk. See
-        // ErosionWheelContactIntegration's own doc.
+        // Review finding (MINECRAFT-510, direction comment 55251/55286): this mod's own shipped
+        // jar now ALWAYS bundles src/divIntegration and its META-INF/services provider file
+        // (pinned-build packaging, direction comment 55251), so ServiceLoader finds the real
+        // DivWheelContactConsumer provider regardless of whether DIV is actually present on a
+        // given server's classpath -- the old "empty iterator when absent" guarantee only held
+        // while that metadata was itself conditionally omitted. If DIV is genuinely absent,
+        // linking that provider's own real DIV-typed method signatures (inside register(), when
+        // its NeoForge::EVENT_BUS.addListener(DivWheelContactConsumer::onWheelGroundContact)
+        // method references get resolved) throws LinkageError/ServiceConfigurationError -- this
+        // loop must catch that per-provider and skip it, not let it crash this mod's own
+        // construction over a different mod's optional dependency being missing.
         int registeredWheelContactIntegrations = 0;
-        for (var integration : ServiceLoader.load(ErosionWheelContactIntegration.class, getClass().getClassLoader())) {
-            integration.register();
-            registeredWheelContactIntegrations++;
+        Iterator<ErosionWheelContactIntegration> wheelContactIntegrations =
+                ServiceLoader.load(ErosionWheelContactIntegration.class, getClass().getClassLoader()).iterator();
+        while (wheelContactIntegrations.hasNext()) {
+            try {
+                wheelContactIntegrations.next().register();
+                registeredWheelContactIntegrations++;
+            } catch (ServiceConfigurationError | LinkageError e) {
+                LOGGER.warn("Skipping a wheel-contact integration provider whose own required "
+                        + "dependency is not actually present on this server (this mod's jar "
+                        + "always ships the provider metadata; the dependency it needs, e.g. "
+                        + "DIV, remains a genuinely optional install): " + e);
+            }
         }
         LOGGER.info("Layered Slopes Dynamic Immersive Vehicles loaded (wheel-contact integrations registered: "
                 + registeredWheelContactIntegrations + ")");

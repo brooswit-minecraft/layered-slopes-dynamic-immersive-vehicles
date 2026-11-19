@@ -20,6 +20,14 @@ name: Pinned-jar smoke acceptance (opt-in)
 # `base-mods-isolation-smoke`: layered-slopes + layered-slope-grading ALONE, with this mod's jar
 # deliberately absent -- proving neither depends on this compat mod and both boot standalone.
 #
+# DIV-present/DIV-absent isolation of this mod's own real packaged jar now live in ci.yml
+# instead of here (`missing-div-isolation-smoke`/`with-div-isolation-smoke`, direction comment
+# 55289): those jobs `needs: build` and download the EXACT jar ci.yml's own build job uploaded,
+# verified by sha256, rather than this workflow independently rebuilding a jar "by the same
+# recipe" -- review finding: that still only proves same-recipe behavior, not that the actual
+# uploaded deliverable bytes were tested, since this ticket already proved DIV's own jar build
+# is not byte-reproducible across separate builds (see gradle.properties).
+#
 # No GameTests run here at all (a real production server has no GameTest harness); success
 # evidence is the real "Done (" startup line plus the real Mod List naming exactly the expected
 # mod ids, the same discipline dependency-failure-acceptance.yml/incompatible-version-acceptance.yml
@@ -265,3 +273,4 @@ jobs:
             server/boot.log
             server/shutdown-status.txt
           if-no-files-found: warn
+
