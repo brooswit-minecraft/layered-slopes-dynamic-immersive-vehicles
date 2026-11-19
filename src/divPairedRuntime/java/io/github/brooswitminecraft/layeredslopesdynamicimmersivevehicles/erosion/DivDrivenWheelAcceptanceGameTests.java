@@ -30,9 +30,11 @@ import minecrafttransportsimulator.mcinterface.AWrapperWorld;
 import minecrafttransportsimulator.systems.ConfigSystem;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
@@ -241,15 +243,78 @@ public final class DivDrivenWheelAcceptanceGameTests {
     }
 
     private static List<BlockPos> buildSourceGrid(GameTestHelper helper) {
+        // Review finding, Jira comment 55314: ErosionAttemptGameTests#placeSourceWithOneValidEastNeighbor
+        // only blocks the SOURCE cell's own other 3 sides -- its own destination's north/south/
+        // east sides are left open (ambient platform), so material arriving there could
+        // redistribute further outward once that cell itself becomes a real LayeredBlock
+        // neighbor. Sealing the destination's OTHER 3 sides too (its own west side is already
+        // the source -- the one real connection) makes this a genuinely isolated 2-cell pocket,
+        // so a real transfer can only ever move between these exact two positions, never spill
+        // beyond what {@link #isConservedNonzeroTransferPair} can actually see.
         List<BlockPos> sourceCells = new ArrayList<>();
         for (int x = 2; x <= 18; x += GRID_STEP) {
             for (int z = 2; z <= 18; z += GRID_STEP) {
                 BlockPos cellPos = new BlockPos(x, 1, z);
                 ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, cellPos);
+                BlockPos destPos = cellPos.east();
+                for (Direction direction : Direction.Plane.HORIZONTAL) {
+                    if (direction != Direction.WEST) {
+                        helper.setBlock(destPos.relative(direction), net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+                    }
+                }
                 sourceCells.add(cellPos);
             }
         }
         return sourceCells;
+    }
+
+    /**
+     * Real conservation check (review finding, Jira comment 55314: "destination gained
+     * material alone is not a conservative signature... count source/destination material with
+     * plain source=16, matching layered material=LAYERS, air=0, reject unexpected block/
+     * material"). Counts each side via {@link #materialAmount}, which rejects (returns -1) a
+     * side whose own real block does not match the expected shape for this exact pair --
+     * confirmed necessary by a real false-reading in run 44457380550 (head fb33010): cell
+     * (8,11) logged a changed "destination" that was actually an UNRELATED block (a different
+     * mod's own incidental material at that position, not a real transfer from this pair's own
+     * source) -- its sum (16 + 5 = 21) correctly fails the conservation check below regardless,
+     * but the explicit same-block rejection here makes that rejection a stated, visible step of
+     * the check, not an accidental side effect of the arithmetic alone.
+     */
+    private static boolean isConservedNonzeroTransferPair(GameTestHelper helper, BlockPos sourceCell) {
+        BlockState sourceState = helper.getBlockState(sourceCell);
+        BlockState destState = helper.getBlockState(sourceCell.east());
+        int sourceAmount = materialAmount(sourceState, destState);
+        int destAmount = materialAmount(destState, sourceState);
+        if (sourceAmount < 0 || destAmount < 0) {
+            return false;
+        }
+        return sourceAmount + destAmount == io.github.brooswitminecraft.layeredslopes.LayerMath.MAX_LAYERS
+                && destAmount >= io.github.brooswitminecraft.layeredslopes.LayerMath.MIN_LAYERS;
+    }
+
+    /**
+     * @return {@code 16} for the real, plain, never-yet-touched source material (vanilla
+     *     {@code DIRT}), {@code 0} for real air, this side's own real {@code LAYERS} value when
+     *     it is a real {@code LayeredBlock} that matches the PAIRED side's own real block
+     *     (once both sides are layered -- a mismatch means this isn't a real transfer between
+     *     this exact pair, see this method's own caller's doc), or {@code -1} (reject) for
+     *     anything else unexpected.
+     */
+    private static int materialAmount(BlockState state, BlockState pairedSideState) {
+        if (state.isAir()) {
+            return 0;
+        }
+        if (state.is(net.minecraft.world.level.block.Blocks.DIRT)) {
+            return 16;
+        }
+        if (state.hasProperty(LayeredBlock.LAYERS)) {
+            if (pairedSideState.hasProperty(LayeredBlock.LAYERS) && pairedSideState.getBlock() != state.getBlock()) {
+                return -1;
+            }
+            return state.getValue(LayeredBlock.LAYERS);
+        }
+        return -1;
     }
 
     /**
@@ -341,20 +406,19 @@ public final class DivDrivenWheelAcceptanceGameTests {
                 try {
                     ctx.handle.vehicle.throttleVar.setTo(0.0, false);
                     ctx.handle.vehicle.rudderInputVar.setTo(0.0, false);
-                    boolean anyAppliedPair = sourceCells.stream().anyMatch(cell -> {
-                        var sourceState = helper.getBlockState(cell);
-                        var destState = helper.getBlockState(cell.east());
-                        return sourceState.hasProperty(LayeredBlock.LAYERS) && sourceState.getValue(LayeredBlock.LAYERS) == 15
-                                && destState.hasProperty(LayeredBlock.LAYERS) && destState.getValue(LayeredBlock.LAYERS) == 1;
-                    });
-                    // Diagnostic (MINECRAFT-510): the correlated-contact listener above already
-                    // confirmed real, above-threshold-slip, positive-load, UP-face contacts DO
-                    // land on a prepared cell -- repeatedly, across dozens of real ticks, unlike
-                    // DivWheelContactConsumerGameTests' own single manually-posted event. If
-                    // real erosion genuinely applied more than once at the SAME cell (plausible
-                    // given ~70+ real qualifying contacts there, vs. that other test's exactly
-                    // one), the result may not be the clean one-hop 15/1 snapshot this check
-                    // looks for. Logging every cell that actually changed at all, with its real
+                    // Real review findings, Jira comments 55312/55313/55314: dozens of real,
+                    // qualifying contacts land on a prepared cell (confirmed by the correlated-
+                    // contact listener above), but a real multi-contact drive need not finish
+                    // at the single manually-posted-event's own clean one-hop 15/1 snapshot --
+                    // real runs showed 11/5 and 8/8, both real conserved pairs (sum=16) just not
+                    // that exact one. isConservedNonzeroTransferPair checks the real
+                    // conservation law directly (source+destination material sums to the real
+                    // LayerMath.MAX_LAYERS, with a nonzero real transfer, rejecting either side
+                    // if it is not the expected recognized material for this exact pair) instead
+                    // of a single hardcoded snapshot.
+                    boolean anyAppliedPair = sourceCells.stream()
+                            .anyMatch(cell -> isConservedNonzeroTransferPair(helper, cell));
+                    // Diagnostic (MINECRAFT-510): logging every cell that actually changed at all, with its real
                     // final LAYERS value, to see the real end state directly rather than
                     // guessing whether a stricter or looser check is the real gap.
                     for (BlockPos cell : sourceCells) {
@@ -392,9 +456,9 @@ public final class DivDrivenWheelAcceptanceGameTests {
                                     + " anyAppliedPair=" + anyAppliedPair);
                     if (expectApplied) {
                         helper.assertTrue(anyAppliedPair, "expected at least one of the " + sourceCells.size()
-                                + " prepared dirt source cells to show the real conserved erosion mutation "
-                                + "(source LAYERS=15, east neighbor LAYERS=1) after genuinely driving a real "
-                                + "vehicle over this platform, but none did");
+                                + " prepared dirt source cells to show a real conserved erosion mutation "
+                                + "(source+destination material summing to a real, nonzero, conserved transfer) "
+                                + "after genuinely driving a real vehicle over this platform, but none did");
                     } else {
                         boolean anyChangedAtAll = sourceCells.stream().anyMatch(cell ->
                                 helper.getBlockState(cell).hasProperty(LayeredBlock.LAYERS));

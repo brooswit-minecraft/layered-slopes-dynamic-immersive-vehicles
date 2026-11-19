@@ -166,3 +166,26 @@ bump: minor
   air-vs-dirt is never silently conflated again -- resolving directly, from the next real run,
   whether this is genuine bidirectional diffusion between two now-eligible neighbors (both real
   erosion, just not landing at the single-event snapshot) or something else.
+- Run 44457380550 (head fb33010) resolved it: cell (11,11) shows BOTH sides as the SAME
+  concrete `dynamicterrain:layered_dirt` block, 8/8 (sums to 16) -- a real, genuine conserved
+  transfer through this mod's own shared `LayeredBlock` mechanic, just registered under a
+  sibling mod's own material rather than vanilla dirt's name, and not the single-event 15/1
+  snapshot. Cell (8,11)'s own "changed" reading was a real false positive: its source stayed
+  literal, unconverted `minecraft:dirt`, while its destination showed an UNRELATED
+  `dynamicterrain:layered_stone` -- a different mod's own incidental material at that exact
+  position, never actually connected to this pair's own source at all (confirmed directly by
+  the now-widened diagnostic's own real block-id logging, not inferred).
+- Real review finding (Jira comment 55314): "destination gained material alone is not a
+  conservative signature... count source/destination material with plain source=16, matching
+  layered material=LAYERS, air=0, reject unexpected block/material; assert initial total equals
+  final total... plus nonzero transfer." Replaced the hardcoded single-event 15/1 check with
+  `isConservedNonzeroTransferPair`/`materialAmount`: counts each side (16 for plain source
+  material, `LAYERS` for a real matching `LayeredBlock`, 0 for air, reject/-1 for anything
+  else), requires the pair's own real sum to equal the real `LayerMath.MAX_LAYERS` with a
+  nonzero real destination amount, and explicitly rejects either side if its own real block
+  does not match what the paired side resolved to (the (8,11)/(9,11) false positive above would
+  already fail on the sum arithmetic alone -- 16+5=21 -- but this makes the rejection itself a
+  stated, visible step rather than an accidental side effect). Also sealed each prepared cell's
+  own destination's other 3 sides (its own real west side is already the one real connection to
+  its source) into a genuinely isolated 2-cell pocket, per John's own suggested alternative,
+  so a real transfer can never spill beyond what this check can actually see.
