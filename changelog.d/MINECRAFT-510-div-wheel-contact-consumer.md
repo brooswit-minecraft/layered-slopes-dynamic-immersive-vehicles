@@ -92,3 +92,14 @@ bump: minor
   tests' own completion and asserts the real registered config is back to its real default.
   `div-paired-runtime.yml`'s expected GameTest count is bumped again, 23 -> 24, for this third
   test.
+- That reference-counted guard still wasn't sufficient on its own: this CI run caught a real,
+  separate failure in `ErosionModConfigGameTests#realConfigBootsWithErosionDisabledByDefault` --
+  a completely unrelated, pre-existing default-batch test that reads the same `OVERRIDES` at its
+  own start. Every `@GameTest` in this codebase defaults to the same `"defaultBatch"`, and a
+  batch's tests all run concurrently (interleaved tick-by-tick, not run to completion one at a
+  time); that pre-existing test happened to tick while one of these new tests' forced-enabled
+  window was still open. All three new `@GameTest` methods are now given their own
+  `batch = "divWheelContactConsumerOverrideBatch"`, which the real GameTest framework schedules
+  as a separate batch that runs sequentially before/after `defaultBatch` rather than concurrently
+  with it -- the only way to safely touch a process-wide singleton like `OVERRIDES` from a
+  `@GameTest` at all.

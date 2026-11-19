@@ -43,11 +43,25 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
  * would capture A's temporary value as its own "original," and whichever of the two restores
  * last would decide the final (wrong) state -- review finding M55554611-followup-2, Jira comment
  * 55274 / GitHub comment 6995981468. {@link #acquireGuaranteedChanceOverride()}/{@link
- * #releaseGuaranteedChanceOverride()} fix this with a simple reference count: only the FIRST
- * acquirer (whichever test reaches it first) captures the true pre-existing snapshot, and only
- * the LAST releaser restores it -- correct regardless of how the two tests' ticks interleave,
- * since both only ever run on the single server thread (never truly concurrently at the
- * instruction level).
+ * #releaseGuaranteedChanceOverride()} fix the race between these tests' OWN two acquisitions
+ * with a simple reference count: only the FIRST acquirer (whichever test reaches it first)
+ * captures the true pre-existing snapshot, and only the LAST releaser restores it -- correct
+ * regardless of how the two tests' ticks interleave with each other.
+ *
+ * <p>That alone was not enough: every {@code @GameTest} in this codebase defaults to the same
+ * {@code "defaultBatch"}, and a batch's tests all run CONCURRENTLY (interleaved tick-by-tick on
+ * the single server thread, not run to completion one at a time) -- confirmed the hard way, by a
+ * real CI failure, when the first version of this fix still broke {@code
+ * ErosionModConfigGameTests#realConfigBootsWithErosionDisabledByDefault} (a completely unrelated,
+ * pre-existing, default-batch test that asserts {@code OVERRIDES.current().erosionEnabled()} is
+ * {@code false} at its own start): it happened to tick while one of these tests' forced-enabled
+ * window was still open, and failed. All three {@code @GameTest} methods below are therefore
+ * given their own {@code batch = "divWheelContactConsumerOverrideBatch"}, which the real
+ * framework (see {@code GameTestBatchFactory}) schedules as a separate batch, run sequentially
+ * before/after {@code defaultBatch} rather than concurrently with it -- the only way to touch a
+ * process-wide singleton like {@code OVERRIDES} from a {@code @GameTest} without risking every
+ * OTHER default-batch test that happens to read it, not just these three's own interaction with
+ * each other.
  */
 @GameTestHolder(LayeredSlopesDynamicImmersiveVehiclesMod.MODID)
 @PrefixGameTestTemplate(false)
@@ -110,7 +124,7 @@ public final class DivWheelContactConsumerGameTests {
      * {@code normalForce} argument, since {@link WheelGroundContactEvent#createIfValid} divides
      * that argument by gravity to compute {@code supportedLoadKg} (same review finding).
      */
-    @GameTest(template = "flat_platform")
+    @GameTest(template = "flat_platform", batch = "divWheelContactConsumerOverrideBatch")
     public static void aRealPostedTopFaceEventFlowsThroughTheRealWiringToExactlyOneApplication(
             GameTestHelper helper) {
         acquireGuaranteedChanceOverride();
@@ -162,7 +176,7 @@ public final class DivWheelContactConsumerGameTests {
      * REFERENCE_LOAD_KG * GRAVITY} unit correction and shared-override-guard usage as the
      * top-face test above; see that method's own doc, and this class's own doc, for why.
      */
-    @GameTest(template = "flat_platform")
+    @GameTest(template = "flat_platform", batch = "divWheelContactConsumerOverrideBatch")
     public static void aRealPostedSideFaceEventNeverReachesAnAttemptThroughTheRealWiring(GameTestHelper helper) {
         acquireGuaranteedChanceOverride();
         try {
@@ -202,7 +216,7 @@ public final class DivWheelContactConsumerGameTests {
      * boot-time default ({@code erosionEnabled=false}, independently proven by {@link
      * ErosionModConfigGameTests#realConfigBootsWithErosionDisabledByDefault}).
      */
-    @GameTest(template = "flat_platform")
+    @GameTest(template = "flat_platform", batch = "divWheelContactConsumerOverrideBatch")
     public static void theSharedOverrideGuardLeavesTheConfigExactlyAsFoundAfterBothTestsComplete(
             GameTestHelper helper) {
         helper.runAfterDelay(10, () -> {
