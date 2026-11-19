@@ -68,12 +68,15 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
  * this does).
  *
  * <p>{@link ErosionModConfig#OVERRIDES} is forced to {@link
- * ErosionAttemptGameTests#GUARANTEED_CHANCE_CONFIG} for the duration (same real, process-wide
- * singleton {@link DivWheelContactConsumer} itself reads), restored on every path exactly like
- * {@link DivWheelContactConsumerGameTests}. Runs in its own dedicated {@code batch} for the same
- * reason that class's own doc explains: every {@code @GameTest} in this codebase defaults to the
- * same concurrently-ticking {@code "defaultBatch"}, and mutating this process-wide singleton
- * there risks any other default-batch test that happens to read it.
+ * ErosionAttemptGameTests#GUARANTEED_CHANCE_CONFIG} for the enabled phase via the shared {@link
+ * GuaranteedChanceOverrideGuard} (same real, process-wide singleton {@link
+ * DivWheelContactConsumer} itself reads, also used by {@link DivWheelContactConsumerGameTests}).
+ * Shares that class's own {@code batch = "divWheelContactConsumerOverrideBatch"} -- a real CI
+ * failure proved that a THIRD, merely differently-named batch does not reliably serialize
+ * against that one for a test this much longer-running (see {@link
+ * #aGenuinelyDrivenVehicleWheelProducesConservedMutationWhenEnabledAndNoneWhenDisabled}'s own
+ * doc for the full story and why the enabled/disabled contrast is one single, strictly
+ * sequential test method rather than two separate ones).
  */
 @GameTestHolder(LayeredSlopesDynamicImmersiveVehiclesMod.MODID)
 @PrefixGameTestTemplate(false)
@@ -116,22 +119,25 @@ public final class DivDrivenWheelAcceptanceGameTests {
     private static final int GRID_STEP = 3; // footprint radius 1 + this margin keeps adjacent cells' own neighbor requirements from overlapping
 
     /**
-     * Shared per-run state (review finding, direction comment 55300: {@code driveWithSlipFor}'s
-     * recursive {@code runAfterDelay} chain schedules later callbacks OUTSIDE the method's own
-     * initial try/catch -- an exception thrown from a later tick, or a timeout, could otherwise
-     * leave the real spawned vehicle and the real process-wide {@link ErosionModConfig#OVERRIDES}
-     * singleton behind). {@link #cleanup()} is idempotent (a plain one-shot guard -- everything
-     * here runs on the single server thread, never truly concurrently) and is called from every
-     * possible exit path below, including each individual recursive drive step.
+     * Per-drive-phase state. {@link #cleanup()} is idempotent (a plain one-shot guard --
+     * everything here runs on the single server thread, never truly concurrently) and is called
+     * from every exit path this class's own code can throw from, including each individual
+     * recursive drive step (review finding, direction comment 55300: the recursive {@code
+     * runAfterDelay} chain schedules later callbacks OUTSIDE the enclosing method's own initial
+     * try/catch). Disclosed, NOT yet covered (review finding, direction comment 55304, correctly
+     * flagging this as an open exact-head item rather than letting it pass as "every exit
+     * handled"): a genuine GameTest {@code timeoutTicks} expiry is detected by the framework's
+     * own tick loop directly calling {@code fail(...)}, never through any exception this class's
+     * code could catch, so a timeout mid-phase-one (before {@link
+     * GuaranteedChanceOverrideGuard#release()} ever runs) would still leave the override forced
+     * and the vehicle unremoved; a {@link #spawnVehicle} call that throws partway through
+     * (after the entity exists but before every part is attached) would also leave an
+     * unconfigured entity behind, since {@code ctx.handle} is only assigned once that call
+     * returns successfully.
      */
     private static final class TestContext {
-        final ErosionConfig priorConfig;
         VehicleHandle handle;
         private boolean cleanedUp = false;
-
-        TestContext(ErosionConfig priorConfig) {
-            this.priorConfig = priorConfig;
-        }
 
         void cleanup() {
             if (cleanedUp) {
@@ -141,64 +147,81 @@ public final class DivDrivenWheelAcceptanceGameTests {
             if (handle != null) {
                 handle.vehicle.remove();
             }
-            ErosionModConfig.OVERRIDES.reload(priorConfig);
         }
     }
 
     /**
-     * The full real path, end to end: carve a grid of independently-valid erosion-source cells
-     * across this template's real stone floor ({@link
-     * ErosionAttemptGameTests#placeSourceWithOneValidEastNeighbor}, spaced {@link #GRID_STEP}
-     * blocks apart so no two cells' own self-contained neighbor requirements overlap), spawn a
-     * real vehicle centered on that grid, let it settle onto the real floor, then drive it
-     * forward with a steady rudder pulse for long enough to pass over several cells while
-     * genuinely slipping sideways -- real wheel contacts at real positions, through the real
-     * unmodified production chain. Succeeds only if at least one prepared cell shows the real,
-     * conserved {@code ErosionAttempt} mutation shape (source {@code LayeredBlock.LAYERS == 15},
-     * its own east neighbor {@code == 1} -- the exact pair {@link DivWheelContactConsumerGameTests}'
-     * own real-wiring test already established as genuine {@code Outcome.APPLIED} evidence, not
-     * merely "any layered block exists").
+     * Both the enabled real-driven-mutation evidence AND the disabled real-driven negative
+     * control the review explicitly asked for (direction comment 55300: "include the actual
+     * driven protected/disabled unchanged control... rather than using successful boot or
+     * manually-posted events as substitutes") in ONE {@code @GameTest} method, run strictly
+     * sequentially: spawn vehicle A with {@link ErosionModConfig#OVERRIDES} forced to {@link
+     * ErosionAttemptGameTests#GUARANTEED_CHANCE_CONFIG} (via the shared {@link
+     * GuaranteedChanceOverrideGuard}, released once vehicle A is fully done and removed), THEN
+     * -- only after that first phase has entirely finished -- reset the same grid and spawn a
+     * SECOND vehicle B with the override genuinely back at its real default
+     * ({@code erosionEnabled=false}), asserting NO mutation occurs despite identical real
+     * driving.
+     *
+     * <p>Real review finding (direction comment 55301): an earlier revision ran these as TWO
+     * separate {@code @GameTest} methods sharing a batch name with {@code
+     * DivWheelContactConsumerGameTests}' own three tests. A real CI failure proved that batch-
+     * name separation alone does not reliably serialize a MUCH longer-running test (200+ ticks)
+     * against batch-mates: {@code
+     * theSharedOverrideGuardLeavesTheConfigExactlyAsFoundAfterBothTestsComplete}'s own 10-tick
+     * check observed {@code erosionEnabled} still forced on, left behind by this class's own
+     * still-in-flight long drive window. Running both phases as one strictly sequential chain
+     * within a SINGLE test method removes any dependency on GameTest's own batch-advance timing
+     * entirely -- phase two provably cannot start, let alone finish, before phase one's own
+     * {@link GuaranteedChanceOverrideGuard#release()} call has already happened.
      */
-    @GameTest(template = "driven_wheel_platform", batch = "divDrivenWheelAcceptanceBatch", timeoutTicks = 400)
-    public static void aGenuinelyDrivenVehicleWheelProducesARealErosionMutation(GameTestHelper helper) {
-        runDrivenWheelScenario(helper, ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG, true);
+    @GameTest(template = "driven_wheel_platform", batch = "divWheelContactConsumerOverrideBatch", timeoutTicks = 900)
+    public static void aGenuinelyDrivenVehicleWheelProducesConservedMutationWhenEnabledAndNoneWhenDisabled(
+            GameTestHelper helper) {
+        ServerLevel level = (ServerLevel) helper.getLevel();
+        List<BlockPos> sourceCells = buildSourceGrid(helper);
+        GuaranteedChanceOverrideGuard.acquire();
+        runDrivenWheelPhase(helper, level, sourceCells, true, () -> {
+            GuaranteedChanceOverrideGuard.release();
+            // Reset the SAME cells back to their clean dirt+neighbor shape (discarding phase
+            // one's own real mutation) before phase two reuses them -- erosionEnabled is
+            // genuinely back to its real default here, since release() above already ran.
+            for (BlockPos cell : sourceCells) {
+                ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, cell);
+            }
+            runDrivenWheelPhase(helper, level, sourceCells, false, helper::succeed);
+        });
+    }
+
+    private static List<BlockPos> buildSourceGrid(GameTestHelper helper) {
+        List<BlockPos> sourceCells = new ArrayList<>();
+        for (int x = 2; x <= 18; x += GRID_STEP) {
+            for (int z = 2; z <= 18; z += GRID_STEP) {
+                BlockPos cellPos = new BlockPos(x, 1, z);
+                ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, cellPos);
+                sourceCells.add(cellPos);
+            }
+        }
+        return sourceCells;
     }
 
     /**
-     * The real, driven negative control the review explicitly asked for (direction comment
-     * 55300: "include the actual driven protected/disabled unchanged control... rather than
-     * using successful boot or manually-posted events as substitutes"): the IDENTICAL real
-     * vehicle, grid, and drive maneuver as the enabled test above, but with {@link
-     * ErosionModConfig#OVERRIDES} left at {@link ErosionConfig#DEFAULT} (real
-     * {@code erosionEnabled=false}) -- proving genuine driving alone, without the config gate
-     * also being on, produces no mutation at all. This is the same real-world/config contrast
-     * {@code ErosionModConfigGameTests} already establishes for the non-DIV path; this is that
-     * same contrast for the real, driven-vehicle path.
+     * One full real phase: spawn a real vehicle centered on the grid (not an edge/corner, so
+     * genuine driving reaches several cells regardless of which way the vehicle's own "forward"
+     * axis actually points), let it settle onto the real floor, drive it forward then add a
+     * steady rudder pulse while already cruising (see {@link #driveStraightFor}/{@link
+     * #driveWithSlipFor}'s own docs for why that exact order), then check the real conserved
+     * mutation shape (source {@code LayeredBlock.LAYERS == 15}, its own east neighbor
+     * {@code == 1} -- the exact pair {@link DivWheelContactConsumerGameTests}' own real-wiring
+     * test already established as genuine {@code Outcome.APPLIED} evidence, not merely "any
+     * layered block exists") against {@code expectApplied}, removes the vehicle, then runs
+     * {@code onDone}.
      */
-    @GameTest(template = "driven_wheel_platform", batch = "divDrivenWheelAcceptanceBatch", timeoutTicks = 400)
-    public static void aGenuinelyDrivenVehicleWheelAppliesNoMutationWhenErosionDisabled(GameTestHelper helper) {
-        runDrivenWheelScenario(helper, ErosionConfig.DEFAULT, false);
-    }
-
-    private static void runDrivenWheelScenario(GameTestHelper helper, ErosionConfig scenarioConfig, boolean expectApplied) {
-        TestContext ctx = new TestContext(ErosionModConfig.OVERRIDES.current());
+    private static void runDrivenWheelPhase(GameTestHelper helper, ServerLevel level, List<BlockPos> sourceCells,
+            boolean expectApplied, Runnable onDone) {
+        TestContext ctx = new TestContext();
         try {
-            ErosionModConfig.OVERRIDES.reload(scenarioConfig);
-            ServerLevel level = (ServerLevel) helper.getLevel();
-
-            List<BlockPos> sourceCells = new ArrayList<>();
-            for (int x = 2; x <= 18; x += GRID_STEP) {
-                for (int z = 2; z <= 18; z += GRID_STEP) {
-                    BlockPos cellPos = new BlockPos(x, 1, z);
-                    ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, cellPos);
-                    sourceCells.add(cellPos);
-                }
-            }
-
-            // Centered on the grid (not an edge/corner) so genuine driving reaches several cells
-            // regardless of which way the vehicle's own "forward" axis actually points.
-            BlockPos spawnRelative = new BlockPos(10, 1, 10);
-            BlockPos spawnAbsolute = helper.absolutePos(spawnRelative);
+            BlockPos spawnAbsolute = helper.absolutePos(new BlockPos(10, 1, 10));
             ctx.handle = spawnVehicle(level, spawnAbsolute);
 
             helper.runAfterDelay(SETTLE_TICKS, () -> driveStraightFor(helper, ctx, STRAIGHT_DRIVE_TICKS, () -> driveWithSlipFor(helper, ctx, TURN_TICKS, () -> {
@@ -228,7 +251,7 @@ public final class DivDrivenWheelAcceptanceGameTests {
                                 + "plain dirt after genuinely driving a real vehicle over this platform with "
                                 + "erosion disabled, but at least one changed");
                     }
-                    helper.succeed();
+                    onDone.run();
                 } finally {
                     ctx.cleanup();
                 }

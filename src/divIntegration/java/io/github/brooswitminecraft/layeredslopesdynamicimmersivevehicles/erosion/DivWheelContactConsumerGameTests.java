@@ -42,11 +42,11 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
  * default batch: if test B's setup runs while test A's forced override is still in effect, B
  * would capture A's temporary value as its own "original," and whichever of the two restores
  * last would decide the final (wrong) state -- review finding M55554611-followup-2, Jira comment
- * 55274 / GitHub comment 6995981468. {@link #acquireGuaranteedChanceOverride()}/{@link
- * #releaseGuaranteedChanceOverride()} fix the race between these tests' OWN two acquisitions
- * with a simple reference count: only the FIRST acquirer (whichever test reaches it first)
- * captures the true pre-existing snapshot, and only the LAST releaser restores it -- correct
- * regardless of how the two tests' ticks interleave with each other.
+ * 55274 / GitHub comment 6995981468. {@link GuaranteedChanceOverrideGuard#acquire()}/{@link
+ * GuaranteedChanceOverrideGuard#release()} fix the race between overlapping acquisitions with a
+ * simple reference count: only the FIRST acquirer (whichever test reaches it first) captures the
+ * true pre-existing snapshot, and only the LAST releaser restores it -- correct regardless of
+ * how any number of tests' ticks interleave with each other.
  *
  * <p>That alone was not enough: every {@code @GameTest} in this codebase defaults to the same
  * {@code "defaultBatch"}, and a batch's tests all run CONCURRENTLY (interleaved tick-by-tick on
@@ -57,11 +57,13 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
  * {@code false} at its own start): it happened to tick while one of these tests' forced-enabled
  * window was still open, and failed. All three {@code @GameTest} methods below are therefore
  * given their own {@code batch = "divWheelContactConsumerOverrideBatch"}, which the real
- * framework (see {@code GameTestBatchFactory}) schedules as a separate batch, run sequentially
- * before/after {@code defaultBatch} rather than concurrently with it -- the only way to touch a
- * process-wide singleton like {@code OVERRIDES} from a {@code @GameTest} without risking every
- * OTHER default-batch test that happens to read it, not just these three's own interaction with
- * each other.
+ * framework (see {@code GameTestBatchFactory}) schedules as a separate batch from {@code
+ * defaultBatch}. Even distinct batch names do not guarantee full serialization against EVERY
+ * other batch for a long-running test, though (direction comment 55301: {@code
+ * DivDrivenWheelAcceptanceGameTests}' own much-longer real drive window still overlapped this
+ * batch's own deterministic-evidence test under an earlier, separate-batch design) -- both
+ * classes now share this exact batch name AND the same {@link GuaranteedChanceOverrideGuard}, so
+ * the reference count itself is what guarantees correctness, not batch-name separation alone.
  */
 @GameTestHolder(LayeredSlopesDynamicImmersiveVehiclesMod.MODID)
 @PrefixGameTestTemplate(false)
@@ -74,40 +76,11 @@ public final class DivWheelContactConsumerGameTests {
     /** {@code ErosionConfig}'s real gravity-like unit: Earth-standard, matching other acceptance workflows. */
     private static final double GRAVITY = 9.8;
 
-    /** Reference-counted guard state for {@link #acquireGuaranteedChanceOverride()}. */
-    private static int activeOverrideUsers = 0;
-    /** The real pre-existing snapshot, captured only by the first acquirer. */
-    private static ErosionConfig originalOverrideBeforeAnyTest;
-
-    /**
-     * Forces {@link ErosionModConfig#OVERRIDES} to {@link
-     * ErosionAttemptGameTests#GUARANTEED_CHANCE_CONFIG}. Safe to call from more than one
-     * overlapping test: only the first call (while the count is zero) captures the real
-     * pre-existing snapshot into {@link #originalOverrideBeforeAnyTest} -- a second, overlapping
-     * call sees the count already above zero and does NOT overwrite that captured snapshot with
-     * the already-forced value, which is exactly the bug review finding M55554611-followup-2
-     * caught in the previous per-test independent capture.
-     */
-    private static void acquireGuaranteedChanceOverride() {
-        if (activeOverrideUsers == 0) {
-            originalOverrideBeforeAnyTest = ErosionModConfig.OVERRIDES.current();
-        }
-        activeOverrideUsers++;
-        ErosionModConfig.OVERRIDES.reload(ErosionAttemptGameTests.GUARANTEED_CHANCE_CONFIG);
-    }
-
-    /**
-     * Releases one acquisition. Only restores {@link #originalOverrideBeforeAnyTest} once the
-     * count returns to zero -- i.e. only once EVERY overlapping acquirer has released -- so an
-     * earlier-finishing test can never prematurely restore the override while a later-finishing
-     * one still needs it forced on.
-     */
-    private static void releaseGuaranteedChanceOverride() {
-        activeOverrideUsers--;
-        if (activeOverrideUsers == 0) {
-            ErosionModConfig.OVERRIDES.reload(originalOverrideBeforeAnyTest);
-        }
-    }
+    // Acquire/release moved to the shared GuaranteedChanceOverrideGuard (direction comment
+    // 55301): a real CI failure proved this class's OWN guard, combined with trusting a
+    // distinct batch name to fully serialize against OTHER classes, was not enough once a
+    // second, much-longer-running real-wiring test (DivDrivenWheelAcceptanceGameTests, a
+    // separate class) shares this same batch and singleton. See that shared class's own doc.
 
     /**
      * The full real path: post a real, valid {@link WheelGroundContactEvent} for the source
@@ -127,7 +100,7 @@ public final class DivWheelContactConsumerGameTests {
     @GameTest(template = "flat_platform", batch = "divWheelContactConsumerOverrideBatch")
     public static void aRealPostedTopFaceEventFlowsThroughTheRealWiringToExactlyOneApplication(
             GameTestHelper helper) {
-        acquireGuaranteedChanceOverride();
+        GuaranteedChanceOverrideGuard.acquire();
         try {
             BlockPos pos = new BlockPos(1, 2, 1);
             ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, pos);
@@ -159,11 +132,11 @@ public final class DivWheelContactConsumerGameTests {
                                     + destState);
                     helper.succeed();
                 } finally {
-                    releaseGuaranteedChanceOverride();
+                    GuaranteedChanceOverrideGuard.release();
                 }
             });
         } catch (RuntimeException | Error e) {
-            releaseGuaranteedChanceOverride();
+            GuaranteedChanceOverrideGuard.release();
             throw e;
         }
     }
@@ -178,7 +151,7 @@ public final class DivWheelContactConsumerGameTests {
      */
     @GameTest(template = "flat_platform", batch = "divWheelContactConsumerOverrideBatch")
     public static void aRealPostedSideFaceEventNeverReachesAnAttemptThroughTheRealWiring(GameTestHelper helper) {
-        acquireGuaranteedChanceOverride();
+        GuaranteedChanceOverrideGuard.acquire();
         try {
             BlockPos pos = new BlockPos(1, 2, 4);
             ErosionAttemptGameTests.placeSourceWithOneValidEastNeighbor(helper, pos);
@@ -197,11 +170,11 @@ public final class DivWheelContactConsumerGameTests {
                                     + "source must still be plain dirt, got " + helper.getBlockState(pos));
                     helper.succeed();
                 } finally {
-                    releaseGuaranteedChanceOverride();
+                    GuaranteedChanceOverrideGuard.release();
                 }
             });
         } catch (RuntimeException | Error e) {
-            releaseGuaranteedChanceOverride();
+            GuaranteedChanceOverrideGuard.release();
             throw e;
         }
     }
